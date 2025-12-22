@@ -1,6 +1,0 @@
-pandas>=2.3
-plotly>=6.5
-pytabulator>=0.2.5
-shiny>=1.5
-shinyswatch>=0.7
-shinywidgets>=0.7
