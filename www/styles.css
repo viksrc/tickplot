@@ -1,0 +1,162 @@
+/* Prevent any widget from forcing page-level horizontal scrolling */
+html,
+body,
+.bslib-page-fill {
+    overflow-x: hidden;
+}
+
+/* Tight cards: remove padding around the card body (tables) */
+.card-tight > .card-body {
+    padding: 0 !important;
+}
+.card-tight > .card-body > * {
+    margin: 0 !important;
+}
+
+/* Plotly: ensure charts always expand to full available width */
+#stock_chart,
+#stock_chart .js-plotly-plot,
+#stock_chart .plot-container,
+#stock_chart .svg-container {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+/* Prevent horizontal scrollbars on small Tabulator cards */
+#country_table .tabulator,
+#order_details_table .tabulator,
+#venue_table .tabulator,
+#fill_detail_table .tabulator {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+}
+
+/* Tabulator uses an internal table that can overshoot by a few px due to borders/scrollbars.
+   Hide x overflow but keep y scrolling behavior intact. */
+#order_details_table .tabulator-tableholder,
+#venue_table .tabulator-tableholder,
+#fill_detail_table .tabulator-tableholder {
+    overflow-x: hidden !important;
+}
+
+#country_table .tabulator-tableholder {
+    overflow-x: hidden !important;
+}
+
+#order_details_table .tabulator-table,
+#venue_table .tabulator-table,
+#fill_detail_table .tabulator-table {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+#country_table .tabulator-table {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+/* Navbar tabs: restore pill-style active highlighting */
+.navbar .navbar-nav .nav-link {
+    padding: 0.35rem 0.9rem;
+    font-size: 0.95rem;
+}
+
+/* Keep compact headers; avoid input controls expanding header width */
+.card-header .shiny-input-container,
+.card-header .form-check {
+    margin-bottom: 0 !important;
+}
+.card-header .form-check-label {
+    white-space: nowrap;
+}
+
+/* Order Details: use less right padding so the All toggle sits farther right */
+.order-details-card > .card-header {
+    padding-right: 0 !important;
+}
+
+.navbar .nav-link.active,
+.navbar .nav-link.active:focus,
+.navbar .nav-link.active:hover {
+    background-color: var(--bs-primary);
+    color: var(--bs-white);
+    border-radius: var(--bs-border-radius);
+}
+
+/* Dark mode: use Bootstrap's subtle variants (closer to built-in nav pills) */
+[data-bs-theme="dark"] .navbar .nav-link.active,
+[data-bs-theme="dark"] .navbar .nav-link.active:focus,
+[data-bs-theme="dark"] .navbar .nav-link.active:hover {
+    background-color: var(--bs-primary-bg-subtle);
+    color: var(--bs-primary-text-emphasis);
+    border: 1px solid var(--bs-primary-border-subtle);
+}
+
+/* Dark mode overall app background */
+[data-bs-theme="dark"] {
+    --bs-body-bg: #0d1b2a !important;
+    --bs-tertiary-bg: #1a2332 !important;
+    --bs-secondary-bg: #212d3b !important;
+}
+[data-bs-theme="dark"] body,
+[data-bs-theme="dark"] .bslib-page-fill {
+    background-color: #0d1b2a !important;
+}
+[data-bs-theme="dark"] .card {
+    background-color: #1a2332 !important;
+    border-color: #2d3a4a !important;
+}
+[data-bs-theme="dark"] .card-header {
+    background-color: #212d3b !important;
+    border-color: #2d3a4a !important;
+    color: #e0e0e0 !important;
+}
+[data-bs-theme="dark"] .tabulator {
+    background-color: #0d1b2a !important;
+    border-color: #2d3a4a !important;
+    color: #c9d1d9 !important;
+}
+[data-bs-theme="dark"] .tabulator-header {
+    background-color: #2d3a4a !important;
+    color: #e0e0e0 !important;
+    border-color: #3d4a5a !important;
+}
+[data-bs-theme="dark"] .tabulator-header .tabulator-col {
+    background-color: #2d3a4a !important;
+    border-color: #3d4a5a !important;
+    color: #e0e0e0 !important;
+}
+[data-bs-theme="dark"] .tabulator-header .tabulator-col-content {
+    color: #e0e0e0 !important;
+}
+[data-bs-theme="dark"] .tabulator-tableholder {
+    background-color: #0d1b2a !important;
+}
+[data-bs-theme="dark"] .tabulator-row {
+    background-color: #0d1b2a !important;
+    color: #c9d1d9 !important;
+}
+[data-bs-theme="dark"] .tabulator-row:nth-child(even) {
+    background-color: #1a2332 !important;
+}
+[data-bs-theme="dark"] .tabulator-row:hover {
+    background-color: #2d3a4a !important;
+}
+[data-bs-theme="dark"] .tabulator-row.tabulator-selected {
+    background-color: #5c7cfa !important;
+}
+[data-bs-theme="dark"] .tabulator-cell {
+    border-color: #2d3a4a !important;
+    color: #c9d1d9 !important;
+}
+[data-bs-theme="dark"] .tabulator-footer {
+    background-color: #2d3a4a !important;
+    color: #e0e0e0 !important;
+    border-color: #3d4a5a !important;
+}
+/* Fix progress bar legend text color in dark mode - override inline styles */
+[data-bs-theme="dark"] .tabulator-cell span,
+[data-bs-theme="dark"] .tabulator-cell div {
+    color: #c9d1d9 !important;
+}

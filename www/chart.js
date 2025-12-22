@@ -1,0 +1,189 @@
+// Dynamic Y-axis rescaling when range slider changes
+function resizeAllPlotly() {
+    // Dynamic Y-axis rescaling + dynamic volume bin selection.
+    //
+    // Notes on robustness:
+    // - When loaded as an external file, this may execute before Plotly / Shiny bindings exist.
+    // - Shiny for Python doesn't guarantee jQuery is present, so avoid $(document).on(...).
+    // - Use MutationObserver to re-bind when Plotly graphs are (re)rendered.
+
+    function _safePlotlyResize(graphDiv) {
+        try {
+            if (window.Plotly && Plotly.Plots && Plotly.Plots.resize) {
+                Plotly.Plots.resize(graphDiv);
+            }
+        } catch (e) {
+            // noop
+        }
+    }
+
+    function resizeAllPlotly() {
+        const plotDivs = document.querySelectorAll('.js-plotly-plot');
+        plotDivs.forEach(_safePlotlyResize);
+    }
+
+    function _toEpochMs(val) {
+        if (typeof val === 'number') return val;
+        const s = String(val).replace(' ', 'T');
+        return new Date(s).getTime();
+    }
+
+    function _bindRescaling(graphDiv) {
+        if (!graphDiv || graphDiv._hasRescaling) return;
+        if (typeof graphDiv.on !== 'function') return; // Plotly hasn't enhanced it yet.
+
+        graphDiv._hasRescaling = true;
+
+        // Ensure Plotly fits the container on first bind
+        setTimeout(() => _safePlotlyResize(graphDiv), 50);
+
+        graphDiv.on('plotly_relayout', function (eventdata) {
+            const isXChange = (
+                eventdata['xaxis.range[0]'] ||
+                eventdata['xaxis.range[1]'] ||
+                eventdata['xaxis.range'] ||
+                eventdata['xaxis.autorange']
+            );
+            if (!isXChange) return;
+
+            const traces = graphDiv.data;
+            if (!traces || traces.length < 2) return;
+
+            const times = traces[0].x;
+            const bids = traces[0].y;
+            const asks = traces[1].y;
+
+            let xStart, xEnd;
+            if (eventdata['xaxis.autorange']) {
+                xStart = times[0];
+                xEnd = times[times.length - 1];
+            } else if (eventdata['xaxis.range']) {
+                xStart = eventdata['xaxis.range'][0];
+                xEnd = eventdata['xaxis.range'][1];
+            } else {
+                const currentRange = graphDiv.layout?.xaxis?.range;
+                xStart = eventdata['xaxis.range[0]'] || (currentRange ? currentRange[0] : times[0]);
+                xEnd = eventdata['xaxis.range[1]'] || (currentRange ? currentRange[1] : times[times.length - 1]);
+            }
+
+            // Keep overlay execution axis (x2) aligned with x.
+            try {
+                if (window.Plotly && Plotly.relayout) {
+                    if (eventdata['xaxis.autorange']) {
+                        Plotly.relayout(graphDiv, { 'xaxis2.autorange': true });
+                    } else {
+                        Plotly.relayout(graphDiv, { 'xaxis2.range': [xStart, xEnd], 'xaxis2.autorange': false });
+                    }
+                }
+            } catch (e) {
+                // noop
+            }
+
+            const tStart = _toEpochMs(xStart);
+            const tEnd = _toEpochMs(xEnd);
+            const rangeMins = (tEnd - tStart) / 60000;
+
+            // Dynamic bin switching
+            if (window.Shiny && !Number.isNaN(rangeMins)) {
+                const newBinSize = rangeMins > 78 ? '5min' : (rangeMins > 15 ? '1min' : '30s');
+
+                if (!graphDiv._lastBinSize) {
+                    const layoutRange = graphDiv.layout?.xaxis?.range;
+                    if (layoutRange && layoutRange.length === 2) {
+                        const initMins = (_toEpochMs(layoutRange[1]) - _toEpochMs(layoutRange[0])) / 60000;
+                        graphDiv._lastBinSize = initMins > 78 ? '5min' : (initMins > 15 ? '1min' : '30s');
+                    } else {
+                        graphDiv._lastBinSize = '5min';
+                    }
+                }
+
+                const prevBinSize = graphDiv._lastBinSize;
+                if (newBinSize !== prevBinSize) {
+                    graphDiv._lastBinSize = newBinSize;
+                    Shiny.setInputValue('chart_range_mins', rangeMins);
+                    Shiny.setInputValue('chart_x_range', [xStart, xEnd]);
+                }
+            }
+
+            // Dynamic y-axis rescale (include executions)
+            let minP = Infinity;
+            let maxP = -Infinity;
+            let hasData = false;
+
+            for (let i = 0; i < times.length; i++) {
+                const t = _toEpochMs(times[i]);
+                if (t >= tStart && t <= tEnd) {
+                    if (bids[i] < minP) minP = bids[i];
+                    if (asks[i] > maxP) maxP = asks[i];
+                    hasData = true;
+                }
+            }
+
+            if (traces.length > 2 && traces[2].y && traces[2].x) {
+                const execTimes = traces[2].x;
+                const execPrices = traces[2].y;
+                for (let i = 0; i < execTimes.length; i++) {
+                    const t = _toEpochMs(execTimes[i]);
+                    if (t >= tStart && t <= tEnd) {
+                        if (execPrices[i] < minP) minP = execPrices[i];
+                        if (execPrices[i] > maxP) maxP = execPrices[i];
+                    }
+                }
+            }
+
+            if (hasData && window.Plotly && Plotly.relayout) {
+                const range = maxP - minP;
+                const padding = Math.max(range * 0.10, 0.25);
+                try {
+                    Plotly.relayout(graphDiv, { 'yaxis.range': [minP - padding, maxP + padding] });
+                } catch (e) {
+                    // noop
+                }
+            }
+        });
+    }
+
+    function setupRescaling() {
+        document.querySelectorAll('.js-plotly-plot').forEach(_bindRescaling);
+    }
+
+    function _pokeRebindSoon() {
+        document.querySelectorAll('.js-plotly-plot').forEach(div => {
+            div._hasRescaling = false;
+        });
+        setTimeout(setupRescaling, 250);
+        setTimeout(resizeAllPlotly, 350);
+    }
+
+    function _installObserversOnce() {
+        if (window.__chartRescaleObserverInstalled) return;
+        window.__chartRescaleObserverInstalled = true;
+
+        // Rebind when plotly widgets are added/updated.
+        const obs = new MutationObserver((_mutations) => {
+            // Cheap debounce
+            if (window.__chartRescaleRebindPending) return;
+            window.__chartRescaleRebindPending = true;
+            setTimeout(() => {
+                window.__chartRescaleRebindPending = false;
+                _pokeRebindSoon();
+            }, 100);
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+
+        // Resize when switching bootstrap tabs (Chart becomes visible)
+        document.addEventListener('shown.bs.tab', function () {
+            setTimeout(resizeAllPlotly, 100);
+        });
+
+        window.addEventListener('resize', function () {
+            resizeAllPlotly();
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        _installObserversOnce();
+        // First bind (plotly may render slightly later)
+        setTimeout(setupRescaling, 400);
+        setTimeout(resizeAllPlotly, 600);
+    });
