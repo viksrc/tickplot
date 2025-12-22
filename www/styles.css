@@ -29,7 +29,6 @@ body,
 #fill_detail_table .tabulator {
     width: 100% !important;
     max-width: 100% !important;
-    overflow-x: hidden !important;
 }
 
 /* Tabulator uses an internal table that can overshoot by a few px due to borders/scrollbars.
