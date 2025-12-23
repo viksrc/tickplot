@@ -83,15 +83,15 @@ function resizeAllPlotly() {
             const tEnd = _toEpochMs(xEnd);
             const rangeMins = (tEnd - tStart) / 60000;
 
-            // Dynamic bin switching
+            // Dynamic bin switching - Updated thresholds: >80m=5min, 40-80m=1min, <40m=30s
             if (window.Shiny && !Number.isNaN(rangeMins)) {
-                const newBinSize = rangeMins > 78 ? '5min' : (rangeMins > 15 ? '1min' : '30s');
+                const newBinSize = rangeMins > 80 ? '5min' : (rangeMins >= 40 ? '1min' : '30s');
 
                 if (!graphDiv._lastBinSize) {
                     const layoutRange = graphDiv.layout?.xaxis?.range;
                     if (layoutRange && layoutRange.length === 2) {
                         const initMins = (_toEpochMs(layoutRange[1]) - _toEpochMs(layoutRange[0])) / 60000;
-                        graphDiv._lastBinSize = initMins > 78 ? '5min' : (initMins > 15 ? '1min' : '30s');
+                        graphDiv._lastBinSize = initMins > 80 ? '5min' : (initMins >= 40 ? '1min' : '30s');
                     } else {
                         graphDiv._lastBinSize = '5min';
                     }

@@ -197,17 +197,18 @@ def server(input, output, session):
                 else: pad = 10
                 
                 total_range = duration + pad
-                if total_range > 78:
+                if total_range > 80:
                     return "5min"
-                elif total_range > 15:
+                # Updated switch logic: 40-80m -> 1min, < 40m -> 30s
+                elif total_range >= 40:
                     return "1min"
                 return "30s"
             except (ValueError, AttributeError):
                 return "5min"
 
-        if range_mins > 78:
+        if range_mins > 80:
             return "5min"
-        elif range_mins > 15:
+        elif range_mins >= 40:
             return "1min"
         return "30s"
 
@@ -703,9 +704,9 @@ def server(input, output, session):
             title = f"{venue_type}: {label}" if venue_type else label
 
             # Keep it one-line tall and readable.
-            # Dark bars get white text; Lit bars inherit theme body color.
-            text_style = "" if is_dark else "color: var(--bs-body-color);"
-            text_cls = "text-white" if is_dark else ""
+            # Use theme body color for text across all venues for consistency.
+            text_style = "color: var(--bs-body-color);"
+            text_cls = ""
 
             safe_title = html.escape(title, quote=True)
             safe_label = html.escape(label, quote=True)
@@ -1123,7 +1124,7 @@ def server(input, output, session):
             showticklabels=True,
             tickangle=45,
             tickmode="auto",
-            nticks=10,  # Suggest ~10 ticks, Plotly will pick nice values
+            nticks=20,
             range=x_range,
             autorange=False,
             hoverformat="%H:%M:%S",
@@ -1147,7 +1148,7 @@ def server(input, output, session):
             showticklabels=True,
             tickangle=45,
             tickmode="auto",
-            nticks=10,
+            nticks=20,
             hoverformat="%H:%M:%S",
             tickformatstops=[
                 {"dtickrange": [None, 60_000], "value": "%H:%M:%S"},
