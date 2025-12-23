@@ -99,7 +99,7 @@ app_ui = ui.page_navbar(
             ui.card(
                 ui.card_header("Order Table"),
                 ui.p("Click any order row to see details below."),
-                output_tabulator("country_table"),
+                output_tabulator("orders_table"),
             ),
         ),
     ),
@@ -178,7 +178,7 @@ def server(input, output, session):
         if range_mins is None:
             # Initial state: check the duration of the selected order
             date = str(input.date_picker())
-            row = input.country_table_row_clicked()
+            row = input.orders_table_row_clicked()
             if not row:
                 try:
                     row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
@@ -216,7 +216,7 @@ def server(input, output, session):
     @render.ui
     def chart_title():
         date = str(input.date_picker())
-        row = input.country_table_row_clicked()
+        row = input.orders_table_row_clicked()
         if not row:
             row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
 
@@ -256,7 +256,7 @@ def server(input, output, session):
     @render.ui
     def chart_metrics():
         date = str(input.date_picker())
-        row = input.country_table_row_clicked()
+        row = input.orders_table_row_clicked()
         if not row:
             row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
 
@@ -379,7 +379,7 @@ def server(input, output, session):
         return ui.HTML(css)
 
     @render_tabulator
-    def country_table():
+    def orders_table():
         date = str(input.date_picker())
         df = DATA_SERVICE.query_orders(date).copy()
         # Do not display FillSize in the Orders table (AvgFillSize is shown in Fill Details)
@@ -407,7 +407,7 @@ def server(input, output, session):
         date = str(input.date_picker())
 
         # Get selected row from table
-        row = input.country_table_row_clicked()
+        row = input.orders_table_row_clicked()
         
         if not row:
             row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
@@ -518,7 +518,7 @@ def server(input, output, session):
     def fill_detail_table():
         date = str(input.date_picker())
 
-        row = input.country_table_row_clicked()
+        row = input.orders_table_row_clicked()
         if not row:
             row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
 
@@ -652,7 +652,7 @@ def server(input, output, session):
     def venue_table():
         date = str(input.date_picker())
 
-        row = input.country_table_row_clicked()
+        row = input.orders_table_row_clicked()
         if not row:
             row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
 
@@ -754,7 +754,7 @@ def server(input, output, session):
         is_dark = input.dark_mode() == "dark"
 
         date = str(input.date_picker())
-        row = input.country_table_row_clicked()
+        row = input.orders_table_row_clicked()
         if not row:
             row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
 
@@ -832,7 +832,7 @@ def server(input, output, session):
 
     @render.text
     def selected_country():
-        row = input.country_table_row_clicked()
+        row = input.orders_table_row_clicked()
         if not row:
             return "Click a row in the table to see order info."
         

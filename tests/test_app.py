@@ -10,7 +10,36 @@ def verify(condition, message):
     LOGGER.info(f"  ✅ PASSED: {message}")
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page, expect as pw_expect
+
+def expect(locator, message: str = None):
+    """Wrapper around Playwright expect that logs success."""
+    class LoggingExpect:
+        def __init__(self, locator, message):
+            self._locator = locator
+            self._message = message
+            self._expect = pw_expect(locator)
+        
+        def to_be_visible(self, **kwargs):
+            self._expect.to_be_visible(**kwargs)
+            msg = self._message or "Element is visible"
+            LOGGER.info(f"  ✅ PASSED: {msg}")
+        
+        def to_contain_text(self, text, **kwargs):
+            self._expect.to_contain_text(text, **kwargs)
+            msg = self._message or f"Element contains '{text}'"
+            LOGGER.info(f"  ✅ PASSED: {msg}")
+        
+        def to_have_text(self, text, **kwargs):
+            self._expect.to_have_text(text, **kwargs)
+            msg = self._message or f"Element has text '{text}'"
+            LOGGER.info(f"  ✅ PASSED: {msg}")
+        
+        def __getattr__(self, name):
+            # Fallback for other expect methods without logging
+            return getattr(self._expect, name)
+    
+    return LoggingExpect(locator, message)
 from shiny.playwright import controller
 from shiny.pytest import create_app_fixture
 from shiny.run import ShinyAppProc
@@ -31,16 +60,18 @@ def test_order_visualizer_navigation(page: Page, app: ShinyAppProc):
     # 2. Interact with the Date Picker using controller
     date_picker = controller.InputDate(page, "date_picker")
     date_picker.expect_value("2025-01-01")
-    LOGGER.info("  ✅ PASSED: Date picker initial value is 2025-01-01")
+    verify(True, "Date picker initial value is 2025-01-01")
     
     # 3. Verify the main table exists
-    country_table = page.locator("#country_table")
-    expect(country_table).to_be_visible()
-    LOGGER.info("  ✅ PASSED: Country table is visible")
+    orders_table = page.locator("#orders_table")
+    expect(orders_table, "Orders table is visible").to_be_visible()
     
     # Select the first row
-    first_row = country_table.locator(".tabulator-row").first
-    expect(first_row).to_be_visible()
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row, "First order row is visible").to_be_visible()
+    
+    #Wait for the table to fully load
+    page.wait_for_timeout(300)
     
     def get_cell_text(field: str) -> str:
         return first_row.locator(f'.tabulator-cell[tabulator-field="{field}"]').text_content().strip()
@@ -53,6 +84,7 @@ def test_order_visualizer_navigation(page: Page, app: ShinyAppProc):
     
     LOGGER.info(f"  Selecting order {order_id} ({ticker})")
     first_row.click()
+    page.wait_for_timeout(200)
     
     # 4. Navigate to the Chart tab
     page.get_by_text("Chart", exact=True).click()
@@ -60,14 +92,16 @@ def test_order_visualizer_navigation(page: Page, app: ShinyAppProc):
     
     # 5. Verify Chart Tab elements
     chart_title_el = page.locator("#chart_title")
-    expect(chart_title_el).to_be_visible()
+    expect(chart_title_el, "Chart title is visible").to_be_visible()
     
-    expect(chart_title_el).to_contain_text(order_id)
-    expect(chart_title_el).to_contain_text(side)
-    expect(chart_title_el).to_contain_text(ticker)
-    expect(chart_title_el).to_contain_text(strategy)
-    expect(chart_title_el).to_contain_text(exec_qty)
-    LOGGER.info(f"  ✅ PASSED: Chart title correctly displays order {order_id} details")
+    # Wait for chart title content to update with order details
+    expect(page.locator(f"#chart_title:has-text('{order_id}')"), f"Chart title contains order ID {order_id}").to_be_visible()
+    chart_text = chart_title_el.text_content()
+    verify(order_id in chart_text, f"Chart title contains order ID {order_id}")
+    verify(side in chart_text, f"Chart title contains side {side}")
+    verify(ticker in chart_text, f"Chart title contains ticker {ticker}")
+    verify(strategy in chart_text, f"Chart title contains strategy {strategy}")
+    verify(exec_qty in chart_text, f"Chart title contains exec quantity {exec_qty}")
     
 @pytest.mark.anyio
 def test_settings_interaction(page: Page, app: ShinyAppProc):
@@ -76,30 +110,30 @@ def test_settings_interaction(page: Page, app: ShinyAppProc):
     
     dark_mode = controller.InputDarkMode(page, "dark_mode")
     dark_mode.expect_mode("light") 
-    LOGGER.info("  ✅ PASSED: Initial mode is light")
+    verify(True, "Initial mode is light")
     
     dark_mode.click()
     dark_mode.expect_mode("dark")
-    LOGGER.info("  ✅ PASSED: Toggled to dark mode")
+    verify(True, "Toggled to dark mode")
     
     page.get_by_text("Chart", exact=True).click()
     
     show_all = controller.InputSwitch(page, "show_all_details")
     show_all.expect_checked(False)
-    LOGGER.info("  ✅ PASSED: 'Show All Details' switch defaults to False")
+    verify(True, "'Show All Details' switch defaults to False")
     
     show_all.set(True)
     show_all.expect_checked(True)
-    LOGGER.info("  ✅ PASSED: 'Show All Details' switch toggled to True")
+    verify(True, "'Show All Details' switch toggled to True")
 
 @pytest.mark.anyio
 def test_order_detail_features(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_order_detail_features")
     page.goto(app.url)
     
-    country_table = page.locator("#country_table")
-    first_row = country_table.locator(".tabulator-row").first
-    expect(first_row).to_be_visible()
+    orders_table = page.locator("#orders_table")
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row, "First order row is visible").to_be_visible()
     
     pct_adv_table = first_row.locator('.tabulator-cell[tabulator-field="PctADV"]').text_content().strip()
     LOGGER.info(f"  Order PctADV in main table: {pct_adv_table}")
@@ -108,10 +142,10 @@ def test_order_detail_features(page: Page, app: ShinyAppProc):
     page.get_by_text("Chart", exact=True).click()
     
     order_details_table = page.locator("#order_details_table")
-    expect(order_details_table).to_be_visible()
+    expect(order_details_table, "Order details table is visible").to_be_visible()
     
     pct_adv_row = order_details_table.locator(".tabulator-row", has_text="PctADV")
-    expect(pct_adv_row).to_be_visible()
+    expect(pct_adv_row, "PctADV row is visible").to_be_visible()
     pct_adv_val = pct_adv_row.locator('.tabulator-cell[tabulator-field="Value"]').text_content().strip()
     
     verify(pct_adv_val == pct_adv_table, f"PctADV value {pct_adv_val} matches main table")
@@ -125,7 +159,7 @@ def test_order_detail_features(page: Page, app: ShinyAppProc):
     rows_before = order_details_table.locator(".tabulator-row").count()
     show_all = controller.InputSwitch(page, "show_all_details")
     show_all.set(True)
-    page.wait_for_timeout(500) 
+    page.wait_for_timeout(300) 
     
     rows_after = order_details_table.locator(".tabulator-row").count()
     verify(rows_after > rows_before, f"Row count increased from {rows_before} to {rows_after}")
@@ -139,9 +173,9 @@ def test_fill_details_features(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_fill_details_features")
     page.goto(app.url)
     
-    country_table = page.locator("#country_table")
-    first_row = country_table.locator(".tabulator-row").first
-    expect(first_row).to_be_visible()
+    orders_table = page.locator("#orders_table")
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row, "First order row is visible").to_be_visible()
     
     exec_qty_str = first_row.locator('.tabulator-cell[tabulator-field="ExecQty"]').text_content().strip()
     exec_qty = int(exec_qty_str.replace(",", ""))
@@ -149,7 +183,7 @@ def test_fill_details_features(page: Page, app: ShinyAppProc):
     
     page.get_by_text("Chart", exact=True).click()
     fill_details_table = page.locator("#fill_detail_table")
-    expect(fill_details_table).to_be_visible()
+    verify(fill_details_table.is_visible(), "Fill details table is visible")
     
     num_fills_row = fill_details_table.locator(".tabulator-row", has_text="NumFills")
     num_fills_val = num_fills_row.locator('.tabulator-cell[tabulator-field="Value"]').text_content().strip()
@@ -167,16 +201,17 @@ def test_venue_table_features(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_venue_table_features")
     page.goto(app.url)
     
-    country_table = page.locator("#country_table")
-    first_row = country_table.locator(".tabulator-row").first
+    orders_table = page.locator("#orders_table")
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row, "First order row is visible").to_be_visible()
     first_row.click()
     
     page.get_by_text("Chart", exact=True).click()
     venue_table = page.locator("#venue_table")
-    expect(venue_table).to_be_visible()
+    expect(venue_table, "Venue table is visible").to_be_visible()
     
     rows = venue_table.locator(".tabulator-row")
-    expect(rows.first).to_be_visible()
+    expect(rows.first, "First venue row is visible").to_be_visible()
     row_count = rows.count()
     verify(row_count >= 1, f"Venue table has {row_count} rows")
     
@@ -196,9 +231,9 @@ def test_chart_metrics_features(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_chart_metrics_features")
     page.goto(app.url)
     
-    country_table = page.locator("#country_table")
-    first_row = country_table.locator(".tabulator-row").first
-    expect(first_row).to_be_visible()
+    orders_table = page.locator("#orders_table")
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row, "First order row is visible").to_be_visible()
     
     def get_cell_text(field: str) -> str:
         return first_row.locator(f'.tabulator-cell[tabulator-field="{field}"]').text_content().strip()
@@ -212,7 +247,7 @@ def test_chart_metrics_features(page: Page, app: ShinyAppProc):
     page.get_by_text("Chart", exact=True).click()
     
     chart_metrics = page.locator("#chart_metrics")
-    expect(chart_metrics).to_be_visible()
+    verify(chart_metrics.is_visible(), "Chart metrics container is visible")
     
     def verify_chip(label: str, expected_val_raw: str, is_bps: bool = True):
         chip = chart_metrics.locator("span", has_text=label).first
@@ -242,31 +277,83 @@ def test_stock_chart_existence(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_stock_chart_existence")
     page.goto(app.url)
     
-    country_table = page.locator("#country_table")
-    first_row = country_table.locator(".tabulator-row").first
-    expect(first_row).to_be_visible()
-    first_row.click()
+    orders_table = page.locator("#orders_table")
+    expect(orders_table, "Orders table is visible").to_be_visible()
+    
+    # Select the row with orderid oid10004
+    target_row = orders_table.locator(".tabulator-row", has_text="oid10004")
+    expect(target_row, "Order oid10004 row is visible").to_be_visible()
+    
+    # Get start and end times from the order
+    start_time = target_row.locator('.tabulator-cell[tabulator-field="StartTime"]').text_content().strip()
+    end_time = target_row.locator('.tabulator-cell[tabulator-field="EndTime"]').text_content().strip()
+    verify(start_time != "", f"Order oid10004 has start time: {start_time}")
+    verify(end_time != "", f"Order oid10004 has end time: {end_time}")
+    
+    target_row.click()
     
     page.get_by_text("Chart", exact=True).click()
-    expect(page.locator("#order_chart")).to_be_visible(timeout=5000)
-    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
-    LOGGER.info("  ✅ PASSED: Stock chart and Plotly container are visible")
+    expect(page.locator("#order_chart"), "Stock chart container is visible").to_be_visible()
+    expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
+    
+    # Check for start/end time marker traces
+    marker_traces = page.evaluate('''() => {
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
+        if (!gd || !gd.data) return [];
+        return gd.data
+            .filter(t => t.name === 'Start' || t.name === 'End')
+            .map(t => ({ name: t.name, x: t.x }));
+    }''')
+    
+    verify(len(marker_traces) >= 2, f"Chart has Start and End marker traces (found {len(marker_traces)})")
+    
+    # Find the Start and End traces
+    start_trace = next((t for t in marker_traces if t['name'] == 'Start'), None)
+    end_trace = next((t for t in marker_traces if t['name'] == 'End'), None)
+    
+    verify(start_trace is not None, "Start time marker trace exists")
+    verify(end_trace is not None, "End time marker trace exists")
+    
+    # Extract times from the trace x values and verify they match order times
+    def extract_time_from_marker(x_vals):
+        import re
+        if not x_vals or len(x_vals) == 0:
+            return None
+        # x values are like "2025-01-01T09:30:00"
+        match = re.search(r'T(\d{2}):(\d{2})', str(x_vals[0]))
+        if match:
+            return f"{match.group(1)}:{match.group(2)}"
+        return None
+    
+    # Normalize expected times to HH:MM format
+    def normalize_time(t):
+        parts = t.split(':')
+        return f"{int(parts[0]):02d}:{parts[1]}"
+    
+    expected_start = normalize_time(start_time)
+    expected_end = normalize_time(end_time)
+    
+    actual_start = extract_time_from_marker(start_trace['x']) if start_trace else None
+    actual_end = extract_time_from_marker(end_trace['x']) if end_trace else None
+    
+    verify(actual_start == expected_start, f"Start marker time {actual_start} matches order start {expected_start}")
+    verify(actual_end == expected_end, f"End marker time {actual_end} matches order end {expected_end}")
 
 @pytest.mark.anyio
 def test_volume_chart_features(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_volume_chart_features")
     page.goto(app.url)
     
-    country_table = page.locator("#country_table")
-    first_row = country_table.locator(".tabulator-row").first
-    expect(first_row).to_be_visible()
+    orders_table = page.locator("#orders_table")
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row, "First order row is visible").to_be_visible()
     first_row.click()
     
     page.get_by_text("Chart", exact=True).click()
-    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
     
     volume_bars = page.locator(".trace.bars .point")
-    expect(volume_bars.first).to_be_visible(timeout=5000)
+    expect(volume_bars.first, "First volume bar is visible").to_be_visible()
     bar_count = volume_bars.count()
     verify(bar_count > 0, f"Volume chart has {bar_count} bars")
     
@@ -285,10 +372,10 @@ def test_volume_chart_features(page: Page, app: ShinyAppProc):
 def test_range_slider_presence(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_range_slider_presence")
     page.goto(app.url)
-    page.locator("#country_table .tabulator-row").first.click()
+    page.locator("#orders_table .tabulator-row").first.click()
     page.get_by_text("Chart", exact=True).click()
     
-    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
     
     has_rangeslider = page.evaluate('''() => {
         const gd = document.querySelector("#order_chart .js-plotly-plot");
@@ -296,19 +383,18 @@ def test_range_slider_presence(page: Page, app: ShinyAppProc):
         return xaxis?.rangeslider?.visible === true;
     }''')
     verify(has_rangeslider, "Rangeslider is visible in Plotly layout")
-    expect(page.locator("#order_chart .rangeslider-container")).to_be_visible()
-    LOGGER.info("  ✅ PASSED: Rangeslider SVG container is visible")
+    verify(page.locator("#order_chart .rangeslider-container").is_visible(), "Rangeslider SVG container is visible")
 
 @pytest.mark.anyio
 def test_range_slider_initial_range(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_range_slider_initial_range")
     page.goto(app.url)
-    first_row = page.locator("#country_table .tabulator-row").first
+    first_row = page.locator("#orders_table .tabulator-row").first
     start_time = first_row.locator('.tabulator-cell[tabulator-field="StartTime"]').text_content().strip()
     end_time = first_row.locator('.tabulator-cell[tabulator-field="EndTime"]').text_content().strip()
     first_row.click()
     page.get_by_text("Chart", exact=True).click()
-    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
     
     def time_to_mins(t: str) -> int:
         p = t.split(":")
@@ -346,14 +432,14 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
     page.goto(app.url)
     
     # 1. Select an order
-    country_table = page.locator("#country_table")
-    first_row = country_table.locator(".tabulator-row").first
-    expect(first_row).to_be_visible()
+    orders_table = page.locator("#orders_table")
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row, "First order row is visible").to_be_visible()
     first_row.click()
     
     page.get_by_text("Chart", exact=True).click()
-    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
-    page.wait_for_timeout(2000)
+    expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
+    page.wait_for_timeout(1000)
 
     def get_current_bin_duration():
         labels = page.evaluate('''() => {
@@ -389,8 +475,12 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
             Plotly.relayout(gd, { 'xaxis.range': range });
         }
     }''')
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(1500)
     verify(get_current_bin_duration() == 300, "81-min range uses 5-min bins (300s)")
+    
+    # Verify x-axis synchronization: volume bars share the same x-axis range
+    xaxis_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
+    verify(xaxis_range is not None, "X-axis range defined for both stock price and volume charts (81min)")
 
     # Step B: Check 80 mins (Switchover! Should be 1min / 60s)
     page.evaluate('''() => {
@@ -404,8 +494,12 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
             Plotly.relayout(gd, { 'xaxis.range': range });
         }
     }''')
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(1500)
     verify(get_current_bin_duration() == 60, "80-min range (just below 81) switched to 1-min bins (60s)")
+    
+    # Verify x-axis synchronization
+    xaxis_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
+    verify(xaxis_range is not None, "X-axis range defined for both stock price and volume charts (80min)")
 
     # Step C: Check 41 mins (Still 1min / 60s)
     page.evaluate('''() => {
@@ -419,8 +513,12 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
             Plotly.relayout(gd, { 'xaxis.range': range });
         }
     }''')
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(1500)
     verify(get_current_bin_duration() == 60, "41-min range uses 1-min bins (60s)")
+    
+    # Verify x-axis synchronization
+    xaxis_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
+    verify(xaxis_range is not None, "X-axis range defined for both stock price and volume charts (41min)")
 
     # Step D: Check 39 mins (Switchover! Should be 30s)
     page.evaluate('''() => {
@@ -434,16 +532,20 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
             Plotly.relayout(gd, { 'xaxis.range': range });
         }
     }''')
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(1500)
     verify(get_current_bin_duration() == 30, "39-min range (just below 41) switched to 30s bins")
+    
+    # Verify x-axis synchronization
+    xaxis_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
+    verify(xaxis_range is not None, "X-axis range defined for both stock price and volume charts (39min)")
 
 @pytest.mark.anyio
 def test_range_slider_yaxis_rescaling(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_range_slider_yaxis_rescaling")
     page.goto(app.url)
-    page.locator("#country_table .tabulator-row").first.click()
+    page.locator("#orders_table .tabulator-row").first.click()
     page.get_by_text("Chart", exact=True).click()
-    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
     
     init_y = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.yaxis?.range''')
     verify(init_y is not None, "Initial y-axis range defined")
@@ -453,7 +555,7 @@ def test_range_slider_yaxis_rescaling(page: Page, app: ShinyAppProc):
         const gd = document.querySelector("#order_chart .js-plotly-plot");
         Plotly.relayout(gd, { 'xaxis.range': ['2025-01-01T11:00:00', '2025-01-01T11:30:00'] });
     }''')
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(800)
     
     new_y = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.yaxis?.range''')
     verify(new_y is not None, "Y-axis range defined after zoom")

@@ -23,7 +23,7 @@ body,
 }
 
 /* Prevent horizontal scrollbars on small Tabulator cards */
-#country_table .tabulator,
+#orders_table .tabulator,
 #order_details_table .tabulator,
 #venue_table .tabulator,
 #fill_detail_table .tabulator {
@@ -39,7 +39,7 @@ body,
     overflow-x: hidden !important;
 }
 
-#country_table .tabulator-tableholder {
+#orders_table .tabulator-tableholder {
     overflow-x: hidden !important;
 }
 
@@ -50,7 +50,7 @@ body,
     max-width: 100% !important;
 }
 
-#country_table .tabulator-table {
+#orders_table .tabulator-table {
     width: 100% !important;
     max-width: 100% !important;
 }
