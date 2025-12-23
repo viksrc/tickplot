@@ -1,0 +1,449 @@
+"""Plotly order visualization builder.
+
+This module contains a pure(ish) helper used by the Shiny server to build
+the main order chart figure.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+
+def create_order_viz(
+	*,
+	data_service: Any,
+	date: str,
+	ticker: str,
+	orderid: str,
+	start_time_str: str,
+	end_time_str: str,
+	bin_size: str,
+	is_dark: bool,
+	theme_colors: dict[str, str],
+	x_range: list[str],
+) -> go.Figure:
+	"""Create the Plotly figure for an order.
+
+	Parameters
+	- data_service: object that provides get_prices/get_executions/get_volume_data
+	- date, ticker, orderid: selection keys
+	- start_time_str, end_time_str: order window (HH:MM)
+	- bin_size: one of "5min" | "1min" | "30s"
+	- is_dark: whether UI is in dark mode
+	- theme_colors: mapping with keys: primary, secondary, body_color, warning, danger
+	- x_range: [start_iso, end_iso] strings for the initial view
+	"""
+
+	primary = str(theme_colors.get("primary", "#0d6efd"))
+	body_color = str(theme_colors.get("body_color", "#212529"))
+	warning = str(theme_colors.get("warning", "#ffc107"))
+	danger = str(theme_colors.get("danger", "#dc3545"))
+
+	if is_dark:
+		font_color = "#c9d1d9"
+		grid_color = "rgba(255, 255, 255, 0.1)"
+		volume_color = "rgba(92, 124, 250, 0.6)"
+
+		def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+			h = str(h).lstrip("#")
+			if len(h) == 3:
+				h = "".join([c + c for c in h])
+			return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+		def _mix_hex(a: str, b: str, b_weight: float) -> tuple[int, int, int]:
+			b_weight = float(max(0.0, min(1.0, b_weight)))
+			ar, ag, ab = _hex_to_rgb(a)
+			br, bg, bb = _hex_to_rgb(b)
+			r = int(round(ar * (1.0 - b_weight) + br * b_weight))
+			g = int(round(ag * (1.0 - b_weight) + bg * b_weight))
+			bl = int(round(ab * (1.0 - b_weight) + bb * b_weight))
+			return (r, g, bl)
+
+		bid_color = "#2dd4bf"
+		ask_rgb = _mix_hex(warning, danger, 0.30)
+		ask_color = f"rgb({ask_rgb[0]}, {ask_rgb[1]}, {ask_rgb[2]})"
+		fill_color = f"rgba({ask_rgb[0]}, {ask_rgb[1]}, {ask_rgb[2]}, 0.15)"
+		exec_bubble_color = "rgba(56, 189, 248, 0.7)"
+		exec_bubble_line = "#38bdf8"
+	else:
+		font_color = body_color
+		grid_color = "rgba(0, 0, 0, 0.1)"
+		volume_color = "rgba(24, 100, 171, 0.6)"
+		bid_color = "#0891b2"
+		ask_color = "#ea580c"
+		fill_color = "rgba(234, 88, 12, 0.1)"
+		exec_bubble_color = "rgba(30, 58, 138, 0.5)"
+		exec_bubble_line = "rgba(30, 58, 138, 0.8)"
+
+	stock_data = data_service.get_prices(date, ticker)
+	execution_data = data_service.get_executions(date, orderid)
+
+	fig = make_subplots(
+		rows=2,
+		cols=1,
+		shared_xaxes=False,
+		vertical_spacing=0.22,
+		row_heights=[0.55, 0.25],
+	)
+
+	time_values = stock_data["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
+
+	fig.add_trace(
+		go.Scatter(
+			x=time_values,
+			y=stock_data["Bid"],
+			name="Bid",
+			mode="lines",
+			line=dict(color=bid_color, width=2, shape="hv"),
+			fill=None,
+			customdata=stock_data["BidSize"].tolist(),
+			hovertemplate="<b>Bid</b>: %{y:.2f} x %{customdata}<extra></extra>",
+			hoveron="points+fills",
+		),
+		row=1,
+		col=1,
+	)
+
+	fig.add_trace(
+		go.Scatter(
+			x=time_values,
+			y=stock_data["Ask"],
+			name="Ask",
+			mode="lines",
+			line=dict(color=ask_color, width=2, shape="hv"),
+			fill="tonexty",
+			fillcolor=fill_color,
+			customdata=stock_data["AskSize"].tolist(),
+			hovertemplate="<b>Ask</b>: %{y:.2f} x %{customdata}<extra></extra>",
+			hoveron="points+fills",
+		),
+		row=1,
+		col=1,
+	)
+
+	if not execution_data.empty:
+		exec_time_values = execution_data["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
+		min_size, max_size = 9.2, 30
+		sizes_normalized = (execution_data["Size"] - 50) / (3000 - 50)
+		bubble_sizes = min_size + sizes_normalized * (max_size - min_size)
+
+		fig.add_trace(
+			go.Scatter(
+				x=exec_time_values,
+				y=execution_data["Price"],
+				mode="markers",
+				name="Executions",
+				marker=dict(
+					size=bubble_sizes,
+					sizemode="diameter",
+					color=exec_bubble_color,
+					line=dict(width=1, color=exec_bubble_line),
+				),
+				text=[
+					f"Size: {s:,}<br>Venue: {v}"
+					for s, v in zip(execution_data["Size"], execution_data["Venue"])
+				],
+				customdata=list(
+					zip(
+						execution_data["Bid"].to_numpy(),
+						execution_data["Ask"].to_numpy(),
+						(execution_data["spreadcapture"].to_numpy() * 100.0),
+					)
+				),
+				hovertemplate=(
+					"<b>Execution</b>: %{y:.2f}"
+					"<br>%{text}"
+					"<br>Bid: %{customdata[0]:.2f}"
+					"<br>Ask: %{customdata[1]:.2f}"
+					"<br>SC: %{customdata[2]:.1f}%"
+					"<extra></extra>"
+				),
+				xaxis="x2",
+			),
+			row=1,
+			col=1,
+		)
+
+	volume_df = data_service.get_volume_data(date, ticker, interval=bin_size)
+
+	if "Kind" in volume_df.columns:
+		regular_vol = volume_df.loc[volume_df["Kind"] == "Regular"].copy()
+		auction_vol = volume_df.loc[volume_df["Kind"] != "Regular"].copy()
+	else:
+		regular_vol = volume_df.copy()
+		auction_vol = volume_df.iloc[0:0].copy()
+
+	plot_vol = regular_vol.copy()
+	if bin_size == "5min":
+		bin_delta = pd.to_timedelta(5, unit="m")
+		time_fmt = "%H:%M"
+		open_bin_time = pd.Timestamp("2025-01-01 09:25:00")
+	elif bin_size == "1min":
+		bin_delta = pd.to_timedelta(1, unit="m")
+		time_fmt = "%H:%M"
+		open_bin_time = pd.Timestamp("2025-01-01 09:29:00")
+	else:  # 30s
+		bin_delta = pd.to_timedelta(30, unit="s")
+		time_fmt = "%H:%M:%S"
+		open_bin_time = pd.Timestamp("2025-01-01 09:29:30")
+
+	close_bin_time = pd.Timestamp("2025-01-01 16:00:00")
+
+	if not plot_vol.empty and "Time" in plot_vol.columns:
+		start_txt = plot_vol["Time"].dt.strftime(time_fmt)
+		end_txt = (plot_vol["Time"] + bin_delta).dt.strftime(time_fmt)
+		plot_vol["HoverLabel"] = start_txt + "–" + end_txt
+
+	open_rows = (
+		auction_vol.loc[auction_vol.get("Kind", "") == "Open"].copy()
+		if not auction_vol.empty
+		else auction_vol.iloc[0:0].copy()
+	)
+	close_rows = (
+		auction_vol.loc[auction_vol.get("Kind", "") == "Close"].copy()
+		if not auction_vol.empty
+		else auction_vol.iloc[0:0].copy()
+	)
+
+	def _append_auction_bar(target_time: pd.Timestamp, auction_df: pd.DataFrame, label: str) -> None:
+		nonlocal plot_vol
+		if auction_df.empty:
+			return
+		auction_total = float(pd.to_numeric(auction_df["Volume"], errors="coerce").fillna(0).sum())
+		row_data = {"Time": target_time, "Volume": auction_total, "HoverLabel": label}
+		if "Kind" in plot_vol.columns:
+			row_data["Kind"] = label
+		plot_vol = pd.concat([plot_vol, pd.DataFrame([row_data])], ignore_index=True)
+
+	_append_auction_bar(open_bin_time, open_rows, "Open")
+	_append_auction_bar(close_bin_time, close_rows, "Close")
+
+	open_x_val = open_bin_time.strftime("%Y-%m-%dT%H:%M:%S") if not open_rows.empty else None
+	close_x_val = close_bin_time.strftime("%Y-%m-%dT%H:%M:%S") if not close_rows.empty else None
+
+	if not plot_vol.empty:
+		plot_vol = plot_vol.sort_values("Time")
+		vol_time_values = plot_vol["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
+		hover_labels = (
+			plot_vol["HoverLabel"].astype(str).tolist()
+			if "HoverLabel" in plot_vol.columns
+			else plot_vol["Time"].dt.strftime("%H:%M").tolist()
+		)
+
+		fig.add_trace(
+			go.Bar(
+				x=vol_time_values,
+				y=plot_vol["Volume"],
+				name=f"Volume ({bin_size})",
+				customdata=hover_labels,
+				marker_color=volume_color,
+				marker_line_width=0.5,
+				marker_line_color=grid_color,
+				showlegend=False,
+				hovertemplate="<b>%{customdata}</b><br>Volume: %{y:,}<extra></extra>",
+			),
+			row=2,
+			col=1,
+		)
+
+	start_time_full = f"2025-01-01T{start_time_str}:00"
+	end_time_full = f"2025-01-01T{end_time_str}:00"
+
+	bid_min = float(stock_data["Bid"].min()) if not stock_data.empty else 0.0
+	ask_max = float(stock_data["Ask"].max()) if not stock_data.empty else 1.0
+	exec_min = float(execution_data["Price"].min()) if not execution_data.empty else bid_min
+	exec_max = float(execution_data["Price"].max()) if not execution_data.empty else ask_max
+	y_min = min(bid_min, exec_min)
+	y_max = max(ask_max, exec_max)
+	y_padding = (y_max - y_min) * 0.05 if (y_max - y_min) > 0 else 0.25
+
+	fig.add_trace(
+		go.Scatter(
+			x=[start_time_full, start_time_full],
+			y=[y_min - y_padding, y_max + y_padding],
+			mode="lines",
+			name="Start",
+			line=dict(color="#22c55e", width=2, dash="dash"),
+			hovertemplate="<b>Start Time</b><extra></extra>",
+		),
+		row=1,
+		col=1,
+	)
+
+	fig.add_trace(
+		go.Scatter(
+			x=[end_time_full, end_time_full],
+			y=[y_min - y_padding, y_max + y_padding],
+			mode="lines",
+			name="End",
+			line=dict(color="#ef4444", width=2, dash="dash"),
+			hovertemplate="<b>End Time</b><extra></extra>",
+		),
+		row=1,
+		col=1,
+	)
+
+	fig.update_layout(
+		title=None,
+		bargap=0.2,
+		legend=dict(
+			orientation="h",
+			yanchor="top",
+			y=0.99,
+			xanchor="left",
+			x=0.01,
+			bgcolor="rgba(30, 41, 59, 0.8)" if is_dark else "rgba(255,255,255,0.8)",
+			font=dict(color=font_color),
+			bordercolor=grid_color,
+			borderwidth=1,
+		),
+		margin=dict(l=60, r=20, t=10, b=80),
+		paper_bgcolor="rgba(0,0,0,0)",
+		plot_bgcolor="rgba(0,0,0,0)",
+		font_color=font_color,
+		hovermode="x unified",
+		hoverlabel=dict(
+			bgcolor="rgba(255, 255, 255, 0.6)" if not is_dark else "rgba(30, 41, 59, 0.6)",
+			font_size=12,
+			font_family="Inter, sans-serif",
+		),
+		height=600,
+		xaxis2=dict(
+			overlaying="x",
+			matches="x",
+			type="date",
+			showticklabels=False,
+			showgrid=False,
+			zeroline=False,
+			hoverformat="%H:%M:%S",
+		),
+	)
+
+	fig.update_xaxes(unifiedhovertitle=dict(text=""), row=1, col=1)
+
+	if bin_size == "5min":
+		min_left_mins = 560
+	elif bin_size == "1min":
+		min_left_mins = 565
+	else:
+		min_left_mins = 569
+
+	x_range_slider = [
+		f"2025-01-01T{min_left_mins // 60:02d}:{min_left_mins % 60:02d}:00",
+		"2025-01-01T16:05:00",
+	]
+
+	fig.update_xaxes(
+		gridcolor=grid_color,
+		linecolor=grid_color,
+		row=1,
+		col=1,
+		showticklabels=True,
+		tickangle=45,
+		tickmode="auto",
+		nticks=20,
+		range=x_range,
+		autorange=False,
+		hoverformat="%H:%M:%S",
+		tickformatstops=[
+			{"dtickrange": [None, 60_000], "value": "%H:%M:%S"},
+			{"dtickrange": [60_000, None], "value": "%H:%M"},
+		],
+		rangeslider=dict(
+			visible=True,
+			thickness=0.1,
+			range=x_range_slider,
+		),
+		type="date",
+	)
+
+	fig.update_xaxes(
+		gridcolor=grid_color,
+		linecolor=grid_color,
+		row=2,
+		col=1,
+		showticklabels=True,
+		tickangle=45,
+		tickmode="auto",
+		nticks=20,
+		hoverformat="%H:%M:%S",
+		tickformatstops=[
+			{"dtickrange": [None, 60_000], "value": "%H:%M:%S"},
+			{"dtickrange": [60_000, None], "value": "%H:%M"},
+		],
+		matches="x",
+		type="date",
+	)
+
+	if open_x_val:
+		fig.add_annotation(
+			x=open_x_val,
+			y=-0.08,
+			xref="x",
+			yref="y2 domain",
+			text="Open",
+			textangle=30,
+			showarrow=False,
+			xanchor="center",
+			yanchor="top",
+			font=dict(color=font_color, size=12),
+			bgcolor="rgba(0,0,0,0)",
+		)
+	if close_x_val:
+		fig.add_annotation(
+			x=close_x_val,
+			y=-0.08,
+			xref="x",
+			yref="y2 domain",
+			text="Close",
+			textangle=30,
+			showarrow=False,
+			xanchor="center",
+			yanchor="top",
+			font=dict(color=font_color, size=12),
+			bgcolor="rgba(0,0,0,0)",
+		)
+
+	fig.update_yaxes(
+		gridcolor=grid_color,
+		linecolor=grid_color,
+		row=1,
+		col=1,
+		tickprefix="$",
+		tickformat=".2f",
+		title_text="Price",
+	)
+	fig.update_yaxes(gridcolor=grid_color, linecolor=grid_color, row=2, col=1, title_text="Volume")
+
+	# Initial y-axis autoscale based on the initial x-axis view window.
+	view_start_dt = pd.to_datetime(x_range[0])
+	view_end_dt = pd.to_datetime(x_range[1])
+	stock_view = stock_data[(stock_data["Time"] >= view_start_dt) & (stock_data["Time"] <= view_end_dt)]
+	exec_view = execution_data[(execution_data["Time"] >= view_start_dt) & (execution_data["Time"] <= view_end_dt)]
+
+	min_p = np.inf
+	max_p = -np.inf
+	has_data = False
+
+	if not stock_view.empty:
+		min_p = min(min_p, float(stock_view["Bid"].min()))
+		max_p = max(max_p, float(stock_view["Ask"].max()))
+		has_data = True
+
+	if not exec_view.empty:
+		min_p = min(min_p, float(exec_view["Price"].min()))
+		max_p = max(max_p, float(exec_view["Price"].max()))
+		has_data = True
+
+	if has_data and np.isfinite(min_p) and np.isfinite(max_p):
+		rng = max_p - min_p
+		pad = max(rng * 0.10, 0.25)
+		fig.update_yaxes(range=[min_p - pad, max_p + pad], autorange=False, row=1, col=1)
+
+	return fig
+

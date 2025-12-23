@@ -14,10 +14,10 @@ body,
 }
 
 /* Plotly: ensure charts always expand to full available width */
-#stock_chart,
-#stock_chart .js-plotly-plot,
-#stock_chart .plot-container,
-#stock_chart .svg-container {
+#order_chart,
+#order_chart .js-plotly-plot,
+#order_chart .plot-container,
+#order_chart .svg-container {
     width: 100% !important;
     max-width: 100% !important;
 }

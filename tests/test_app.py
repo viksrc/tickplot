@@ -248,8 +248,8 @@ def test_stock_chart_existence(page: Page, app: ShinyAppProc):
     first_row.click()
     
     page.get_by_text("Chart", exact=True).click()
-    expect(page.locator("#stock_chart")).to_be_visible(timeout=5000)
-    expect(page.locator("#stock_chart .js-plotly-plot")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
     LOGGER.info("  ✅ PASSED: Stock chart and Plotly container are visible")
 
 @pytest.mark.anyio
@@ -263,7 +263,7 @@ def test_volume_chart_features(page: Page, app: ShinyAppProc):
     first_row.click()
     
     page.get_by_text("Chart", exact=True).click()
-    expect(page.locator("#stock_chart .js-plotly-plot")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
     
     volume_bars = page.locator(".trace.bars .point")
     expect(volume_bars.first).to_be_visible(timeout=5000)
@@ -271,7 +271,7 @@ def test_volume_chart_features(page: Page, app: ShinyAppProc):
     verify(bar_count > 0, f"Volume chart has {bar_count} bars")
     
     hover_labels = page.evaluate('''() => {
-        const gd = document.querySelector("#stock_chart .js-plotly-plot");
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
         if (!gd || !gd.data) return [];
         const barTrace = gd.data.find(t => t.type === 'bar');
         return (barTrace && barTrace.customdata) ? barTrace.customdata : [];
@@ -288,15 +288,15 @@ def test_range_slider_presence(page: Page, app: ShinyAppProc):
     page.locator("#country_table .tabulator-row").first.click()
     page.get_by_text("Chart", exact=True).click()
     
-    expect(page.locator("#stock_chart .js-plotly-plot")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
     
     has_rangeslider = page.evaluate('''() => {
-        const gd = document.querySelector("#stock_chart .js-plotly-plot");
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
         const xaxis = gd?.layout?.xaxis;
         return xaxis?.rangeslider?.visible === true;
     }''')
     verify(has_rangeslider, "Rangeslider is visible in Plotly layout")
-    expect(page.locator("#stock_chart .rangeslider-container")).to_be_visible()
+    expect(page.locator("#order_chart .rangeslider-container")).to_be_visible()
     LOGGER.info("  ✅ PASSED: Rangeslider SVG container is visible")
 
 @pytest.mark.anyio
@@ -308,7 +308,7 @@ def test_range_slider_initial_range(page: Page, app: ShinyAppProc):
     end_time = first_row.locator('.tabulator-cell[tabulator-field="EndTime"]').text_content().strip()
     first_row.click()
     page.get_by_text("Chart", exact=True).click()
-    expect(page.locator("#stock_chart .js-plotly-plot")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
     
     def time_to_mins(t: str) -> int:
         p = t.split(":")
@@ -326,7 +326,7 @@ def test_range_slider_initial_range(page: Page, app: ShinyAppProc):
     exp_s = max(min_l, st_m - pad)
     exp_e = min(965, et_m + pad)
     
-    actual_range = page.evaluate('''() => document.querySelector("#stock_chart .js-plotly-plot")?.layout?.xaxis?.range''')
+    actual_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
     verify(actual_range is not None, "Chart has defined x-axis range")
     
     def parse_m(v):
@@ -352,12 +352,12 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
     first_row.click()
     
     page.get_by_text("Chart", exact=True).click()
-    expect(page.locator("#stock_chart .js-plotly-plot")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
     page.wait_for_timeout(2000)
 
     def get_current_bin_duration():
         labels = page.evaluate('''() => {
-            const gd = document.querySelector("#stock_chart .js-plotly-plot");
+            const gd = document.querySelector("#order_chart .js-plotly-plot");
             if (!gd || !gd.data) return [];
             const barTrace = gd.data.find(t => t.type === 'bar');
             return (barTrace && barTrace.customdata) ? barTrace.customdata : [];
@@ -379,7 +379,7 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
 
     # Step A: Check 81 mins (Should be 5min / 300s)
     page.evaluate('''() => {
-        const gd = document.querySelector("#stock_chart .js-plotly-plot");
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
         const range = ['2025-01-01T10:00:00', '2025-01-01T11:21:00']; // 81 minutes
         if (window.Shiny) {
             Shiny.setInputValue('chart_range_mins', 81);
@@ -394,7 +394,7 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
 
     # Step B: Check 80 mins (Switchover! Should be 1min / 60s)
     page.evaluate('''() => {
-        const gd = document.querySelector("#stock_chart .js-plotly-plot");
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
         const range = ['2025-01-01T10:00:00', '2025-01-01T11:20:00']; // 80 minutes
         if (window.Shiny) {
             Shiny.setInputValue('chart_range_mins', 80);
@@ -409,7 +409,7 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
 
     # Step C: Check 41 mins (Still 1min / 60s)
     page.evaluate('''() => {
-        const gd = document.querySelector("#stock_chart .js-plotly-plot");
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
         const range = ['2025-01-01T10:00:00', '2025-01-01T10:41:00']; // 41 minutes
         if (window.Shiny) {
             Shiny.setInputValue('chart_range_mins', 41);
@@ -424,7 +424,7 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
 
     # Step D: Check 39 mins (Switchover! Should be 30s)
     page.evaluate('''() => {
-        const gd = document.querySelector("#stock_chart .js-plotly-plot");
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
         const range = ['2025-01-01T10:00:00', '2025-01-01T10:39:00']; // 39 minutes
         if (window.Shiny) {
             Shiny.setInputValue('chart_range_mins', 39);
@@ -443,19 +443,19 @@ def test_range_slider_yaxis_rescaling(page: Page, app: ShinyAppProc):
     page.goto(app.url)
     page.locator("#country_table .tabulator-row").first.click()
     page.get_by_text("Chart", exact=True).click()
-    expect(page.locator("#stock_chart .js-plotly-plot")).to_be_visible(timeout=5000)
+    expect(page.locator("#order_chart .js-plotly-plot")).to_be_visible(timeout=5000)
     
-    init_y = page.evaluate('''() => document.querySelector("#stock_chart .js-plotly-plot")?.layout?.yaxis?.range''')
+    init_y = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.yaxis?.range''')
     verify(init_y is not None, "Initial y-axis range defined")
     
     # Zoom to 30 mins
     page.evaluate('''() => {
-        const gd = document.querySelector("#stock_chart .js-plotly-plot");
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
         Plotly.relayout(gd, { 'xaxis.range': ['2025-01-01T11:00:00', '2025-01-01T11:30:00'] });
     }''')
     page.wait_for_timeout(1500)
     
-    new_y = page.evaluate('''() => document.querySelector("#stock_chart .js-plotly-plot")?.layout?.yaxis?.range''')
+    new_y = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.yaxis?.range''')
     verify(new_y is not None, "Y-axis range defined after zoom")
     
     changed = abs(new_y[0] - init_y[0]) > 0.001 or abs(new_y[1] - init_y[1]) > 0.001
