@@ -57,12 +57,12 @@ TABLE_OPTIONS = TableOptions(
         {"field": "Country", "title": "Country", "width": 80, "hozAlign": "center"},
         {"field": "Side", "title": "Side", "width": 70, "hozAlign": "center"},
         {"field": "Ticker", "title": "Ticker", "width": 80, "hozAlign": "center"},
-        {"field": "OrderQty", "title": "OrderQty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right"},
+        {"field": "OrderQty", "title": "OrderQty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right", "visible": False},
         {"field": "ExecQty", "title": "ExecQty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right"},
         {"field": "Notional", "title": "Notional", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right"},
-        {"field": "AvgPrice", "title": "AvgPrice", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 3}, "hozAlign": "right"},
+        {"field": "AvgPrice", "title": "AvgPrice", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 3}, "hozAlign": "right", "visible": False},
         {"field": "PctADV", "title": "PctADV", "hozAlign": "right"},
-        {"field": "SpreadCapture", "title": "SpreadCapture", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 1}, "hozAlign": "right"},
+        {"field": "SpreadCapture", "title": "SpreadCapture", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 1}, "hozAlign": "right", "visible": False},
         {"field": "Strategy", "title": "Strategy", "width": 90, "hozAlign": "center"},
         {"field": "StartTime", "title": "Start", "width": 70, "hozAlign": "center"},
         {"field": "EndTime", "title": "End", "width": 70, "hozAlign": "center"},
@@ -737,15 +737,15 @@ def server(input, output, session):
                 for v in venue_qty.index
             ],
             "VenueInfo": [_venue_info(v) for v in venue_qty.index],
-        }).sort_values("Venue").reset_index(drop=True)
+        }).sort_values("PctFill", key=lambda x: x.astype(float), ascending=False).reset_index(drop=True)
         
         venue_options = TableOptions(
             height=200 + VENUE_DETAILS_HEIGHT_DELTA_PX,
             layout="fitColumns",
             columns=[
-                {"field": "VenueCell", "title": "Venue", "hozAlign": "center", "formatter": "html"},
-                {"field": "ExecQty", "title": "Qty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "center"},
-                {"field": "PctFillBar", "title": "% Fill", "hozAlign": "left", "formatter": "html"},
+                {"field": "VenueCell", "title": "Venue", "hozAlign": "center", "formatter": "html", "headerSort": False},
+                {"field": "ExecQty", "title": "Qty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "center", "headerSort": False},
+                {"field": "PctFillBar", "title": "% Fill", "hozAlign": "left", "formatter": "html", "headerSort": False},
                 {"field": "Venue", "visible": False},
                 {"field": "PctFill", "visible": False},
                 {"field": "VenueInfo", "visible": False},
