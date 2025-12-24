@@ -148,7 +148,7 @@ app_ui = ui.page_navbar(
             ),
             col_widths=[2, 10],
         ),
-        ui.include_js("chart.js"),
+        ui.include_js("www/chart.js"),
     ),
     title="Order Visualizer",
     header=ui.TagList(
@@ -198,8 +198,10 @@ def server(input, output, session):
                 else: pad = 10
                 
                 total_range = duration + pad
-                if total_range > 80:
+                if total_range > 160:
                     return "5min"
+                elif total_range > 80:
+                    return "2min"
                 # Updated switch logic: 40-80m -> 1min, < 40m -> 30s
                 elif total_range >= 40:
                     return "1min"
@@ -207,8 +209,10 @@ def server(input, output, session):
             except (ValueError, AttributeError):
                 return "5min"
 
-        if range_mins > 80:
+        if range_mins > 160:
             return "5min"
+        elif range_mins > 80:
+            return "2min"
         elif range_mins >= 40:
             return "1min"
         return "30s"

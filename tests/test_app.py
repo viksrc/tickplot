@@ -379,10 +379,10 @@ def test_range_slider_presence(page: Page, app: ShinyAppProc):
     
     has_rangeslider = page.evaluate('''() => {
         const gd = document.querySelector("#order_chart .js-plotly-plot");
-        const xaxis = gd?.layout?.xaxis;
-        return xaxis?.rangeslider?.visible === true;
+        const xaxis3 = gd?.layout?.xaxis3;
+        return xaxis3?.rangeslider?.visible === true;
     }''')
-    verify(has_rangeslider, "Rangeslider is visible in Plotly layout")
+    verify(has_rangeslider, "Rangeslider is visible in Plotly layout (xaxis3)")
     verify(page.locator("#order_chart .rangeslider-container").is_visible(), "Rangeslider SVG container is visible")
 
 @pytest.mark.anyio
@@ -441,6 +441,15 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
     expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
     page.wait_for_timeout(1000)
 
+    # Wait for chart.js to bind plotly_relayout handler (required now that we drive xaxis3).
+    page.wait_for_function(
+        """() => {
+            const gd = document.querySelector('#order_chart .js-plotly-plot');
+            return !!gd && gd._hasRescaling === true;
+        }""",
+        timeout=5000,
+    )
+
     def get_current_bin_duration():
         labels = page.evaluate('''() => {
             const gd = document.querySelector("#order_chart .js-plotly-plot");
@@ -463,77 +472,105 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
                 return to_sec(t2) - to_sec(t1)
         return None
 
-    # Step A: Check 81 mins (Should be 5min / 300s)
+    def wait_for_bin_duration(expected_seconds: int, message: str, timeout_ms: int = 6000) -> None:
+        import time
+
+        deadline = time.time() + (timeout_ms / 1000.0)
+        last = None
+        while time.time() < deadline:
+            last = get_current_bin_duration()
+            if last == expected_seconds:
+                verify(True, message)
+                return
+            page.wait_for_timeout(200)
+
+        dbg = page.evaluate('''() => {
+            const gd = document.querySelector('#order_chart .js-plotly-plot');
+            return {
+                relayoutCount: gd?.__chartRelayoutCount ?? null,
+                lastEventKeys: gd?.__chartLastEventKeys ?? null,
+                xaxis: gd?.layout?.xaxis?.range ?? null,
+                xaxis2: gd?.layout?.xaxis2?.range ?? null,
+                xaxis3: gd?.layout?.xaxis3?.range ?? null,
+            };
+        }''')
+        verify(last == expected_seconds, f"{message} (last={last}, dbg={dbg})")
+
+    # Step A: Check 161 mins (Should be 5min / 300s)
+    # Use xaxis3.range to simulate rangeslider interaction (rangeslider is on xaxis3)
+    page.evaluate('''() => {
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
+        const range = ['2025-01-01T10:00:00', '2025-01-01T12:41:00']; // 161 minutes
+        if (!window.Plotly || !gd) return null;
+        // Simulate rangeslider by setting xaxis3.range
+        return Plotly.relayout(gd, { 'xaxis3.range': range });
+    }''')
+    wait_for_bin_duration(300, "161-min range uses 5-min bins (300s)")
+    
+    # Verify x-axis synchronization: xaxis should be synced from xaxis3 (rangeslider)
+    xaxis_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
+    verify(xaxis_range is not None, "X-axis range defined for both stock price and volume charts (161min)")
+
+    # Step B: Check 160 mins (Switchover! Should be 2min / 120s)
+    page.evaluate('''() => {
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
+        const range = ['2025-01-01T10:00:00', '2025-01-01T12:40:00']; // 160 minutes
+        if (!window.Plotly || !gd) return null;
+        return Plotly.relayout(gd, { 'xaxis3.range': range });
+    }''')
+    wait_for_bin_duration(120, "160-min range (at threshold) switched to 2-min bins (120s)")
+    
+    # Verify x-axis synchronization
+    xaxis_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
+    verify(xaxis_range is not None, "X-axis range defined for both stock price and volume charts (160min)")
+
+    # Step C: Check 81 mins (Still 2min / 120s)
     page.evaluate('''() => {
         const gd = document.querySelector("#order_chart .js-plotly-plot");
         const range = ['2025-01-01T10:00:00', '2025-01-01T11:21:00']; // 81 minutes
-        if (window.Shiny) {
-            Shiny.setInputValue('chart_range_mins', 81);
-            Shiny.setInputValue('chart_x_range', range);
-        }
-        if (window.Plotly) {
-            Plotly.relayout(gd, { 'xaxis.range': range });
-        }
+        if (!window.Plotly || !gd) return null;
+        return Plotly.relayout(gd, { 'xaxis3.range': range });
     }''')
-    page.wait_for_timeout(1500)
-    verify(get_current_bin_duration() == 300, "81-min range uses 5-min bins (300s)")
+    wait_for_bin_duration(120, "81-min range uses 2-min bins (120s)")
     
-    # Verify x-axis synchronization: volume bars share the same x-axis range
+    # Verify x-axis synchronization
     xaxis_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
     verify(xaxis_range is not None, "X-axis range defined for both stock price and volume charts (81min)")
 
-    # Step B: Check 80 mins (Switchover! Should be 1min / 60s)
+    # Step D: Check 80 mins (Switchover! Should be 1min / 60s)
     page.evaluate('''() => {
         const gd = document.querySelector("#order_chart .js-plotly-plot");
         const range = ['2025-01-01T10:00:00', '2025-01-01T11:20:00']; // 80 minutes
-        if (window.Shiny) {
-            Shiny.setInputValue('chart_range_mins', 80);
-            Shiny.setInputValue('chart_x_range', range);
-        }
-        if (window.Plotly) {
-            Plotly.relayout(gd, { 'xaxis.range': range });
-        }
+        if (!window.Plotly || !gd) return null;
+        return Plotly.relayout(gd, { 'xaxis3.range': range });
     }''')
-    page.wait_for_timeout(1500)
-    verify(get_current_bin_duration() == 60, "80-min range (just below 81) switched to 1-min bins (60s)")
+    wait_for_bin_duration(60, "80-min range (at threshold) switched to 1-min bins (60s)")
     
     # Verify x-axis synchronization
     xaxis_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
     verify(xaxis_range is not None, "X-axis range defined for both stock price and volume charts (80min)")
 
-    # Step C: Check 41 mins (Still 1min / 60s)
+    # Step E: Check 41 mins (Still 1min / 60s)
     page.evaluate('''() => {
         const gd = document.querySelector("#order_chart .js-plotly-plot");
         const range = ['2025-01-01T10:00:00', '2025-01-01T10:41:00']; // 41 minutes
-        if (window.Shiny) {
-            Shiny.setInputValue('chart_range_mins', 41);
-            Shiny.setInputValue('chart_x_range', range);
-        }
-        if (window.Plotly) {
-            Plotly.relayout(gd, { 'xaxis.range': range });
-        }
+        if (!window.Plotly || !gd) return null;
+        return Plotly.relayout(gd, { 'xaxis3.range': range });
     }''')
-    page.wait_for_timeout(1500)
-    verify(get_current_bin_duration() == 60, "41-min range uses 1-min bins (60s)")
+    wait_for_bin_duration(60, "41-min range uses 1-min bins (60s)")
     
     # Verify x-axis synchronization
     xaxis_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
     verify(xaxis_range is not None, "X-axis range defined for both stock price and volume charts (41min)")
 
-    # Step D: Check 39 mins (Switchover! Should be 30s)
+    # Step F: Check 39 mins (Switchover! Should be 30s)
     page.evaluate('''() => {
         const gd = document.querySelector("#order_chart .js-plotly-plot");
         const range = ['2025-01-01T10:00:00', '2025-01-01T10:39:00']; // 39 minutes
-        if (window.Shiny) {
-            Shiny.setInputValue('chart_range_mins', 39);
-            Shiny.setInputValue('chart_x_range', range);
-        }
-        if (window.Plotly) {
-            Plotly.relayout(gd, { 'xaxis.range': range });
-        }
+        if (!window.Plotly || !gd) return null;
+        return Plotly.relayout(gd, { 'xaxis3.range': range });
     }''')
-    page.wait_for_timeout(1500)
-    verify(get_current_bin_duration() == 30, "39-min range (just below 41) switched to 30s bins")
+    wait_for_bin_duration(30, "39-min range (below 40) switched to 30s bins")
     
     # Verify x-axis synchronization
     xaxis_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
@@ -546,20 +583,49 @@ def test_range_slider_yaxis_rescaling(page: Page, app: ShinyAppProc):
     page.locator("#orders_table .tabulator-row").first.click()
     page.get_by_text("Chart", exact=True).click()
     expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
+
+    # Wait for chart.js to bind plotly_relayout handler (required now that we drive xaxis3).
+    page.wait_for_function(
+        """() => {
+            const gd = document.querySelector('#order_chart .js-plotly-plot');
+            return !!gd && gd._hasRescaling === true;
+        }""",
+        timeout=5000,
+    )
     
     init_y = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.yaxis?.range''')
     verify(init_y is not None, "Initial y-axis range defined")
     
-    # Zoom to 30 mins
+    # Zoom to 30 mins using xaxis3 (rangeslider) - should sync to xaxis and trigger y-rescale
     page.evaluate('''() => {
         const gd = document.querySelector("#order_chart .js-plotly-plot");
-        Plotly.relayout(gd, { 'xaxis.range': ['2025-01-01T11:00:00', '2025-01-01T11:30:00'] });
+        if (!window.Plotly || !gd) return null;
+        return Plotly.relayout(gd, { 'xaxis3.range': ['2025-01-01T11:00:00', '2025-01-01T11:30:00'] });
     }''')
-    page.wait_for_timeout(800)
-    
-    new_y = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.yaxis?.range''')
-    verify(new_y is not None, "Y-axis range defined after zoom")
-    
-    changed = abs(new_y[0] - init_y[0]) > 0.001 or abs(new_y[1] - init_y[1]) > 0.001
-    verify(changed, "Y-axis range adjusted after zoom")
+    import time
+
+    deadline = time.time() + 6.0
+    new_y = None
+    changed = False
+    while time.time() < deadline:
+        new_y = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.yaxis?.range''')
+        if new_y is not None:
+            changed = abs(new_y[0] - init_y[0]) > 0.001 or abs(new_y[1] - init_y[1]) > 0.001
+            if changed:
+                break
+        page.wait_for_timeout(200)
+
+    dbg = page.evaluate('''() => {
+        const gd = document.querySelector('#order_chart .js-plotly-plot');
+        return {
+            relayoutCount: gd?.__chartRelayoutCount ?? null,
+            lastEventKeys: gd?.__chartLastEventKeys ?? null,
+            xaxis: gd?.layout?.xaxis?.range ?? null,
+            xaxis2: gd?.layout?.xaxis2?.range ?? null,
+            xaxis3: gd?.layout?.xaxis3?.range ?? null,
+            yaxis: gd?.layout?.yaxis?.range ?? null,
+        };
+    }''')
+    verify(new_y is not None, f"Y-axis range defined after zoom (dbg={dbg})")
+    verify(changed, f"Y-axis range adjusted after zoom (dbg={dbg})")
     verify(new_y[1] - new_y[0] <= (init_y[1] - init_y[0]) * 1.5, "Zoomed y-axis span is reasonable")

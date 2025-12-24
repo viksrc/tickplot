@@ -38,13 +38,22 @@ function resizeAllPlotly() {
         setTimeout(() => _safePlotlyResize(graphDiv), 50);
 
         graphDiv.on('plotly_relayout', function (eventdata) {
+            // Detect changes on MAIN axis (xaxis) or SLIDER axis (xaxis3).
+            // With matches='x', dragging xaxis3 syncs xaxis VISUALLY but does NOT fire xaxis events.
+            // So we must explicitly check for xaxis3 changes.
             const isXChange = (
                 eventdata['xaxis.range[0]'] ||
                 eventdata['xaxis.range[1]'] ||
                 eventdata['xaxis.range'] ||
                 eventdata['xaxis.autorange']
             );
-            if (!isXChange) return;
+            const isX3Change = (
+                eventdata['xaxis3.range[0]'] ||
+                eventdata['xaxis3.range[1]'] ||
+                eventdata['xaxis3.range'] ||
+                eventdata['xaxis3.autorange']
+            );
+            if (!isXChange && !isX3Change) return;
 
             const traces = graphDiv.data;
             if (!traces || traces.length < 2) return;
@@ -54,13 +63,25 @@ function resizeAllPlotly() {
             const asks = traces[1].y;
 
             let xStart, xEnd;
-            if (eventdata['xaxis.autorange']) {
+            // Read range from eventdata first (the actual change), then layout as fallback.
+            // When xaxis3 is set programmatically, layout.xaxis may not be synced yet.
+            if (eventdata['xaxis.autorange'] || eventdata['xaxis3.autorange']) {
                 xStart = times[0];
                 xEnd = times[times.length - 1];
+            } else if (eventdata['xaxis3.range']) {
+                // xaxis3 event (slider) - use xaxis3 range directly
+                xStart = eventdata['xaxis3.range'][0];
+                xEnd = eventdata['xaxis3.range'][1];
             } else if (eventdata['xaxis.range']) {
+                // xaxis event (main chart) - use xaxis range directly
                 xStart = eventdata['xaxis.range'][0];
                 xEnd = eventdata['xaxis.range'][1];
+            } else if (eventdata['xaxis3.range[0]'] || eventdata['xaxis3.range[1]']) {
+                const layoutRange = graphDiv.layout?.xaxis3?.range;
+                xStart = eventdata['xaxis3.range[0]'] || (layoutRange ? layoutRange[0] : times[0]);
+                xEnd = eventdata['xaxis3.range[1]'] || (layoutRange ? layoutRange[1] : times[times.length - 1]);
             } else {
+                // Fallback to layout or eventdata fragments
                 const currentRange = graphDiv.layout?.xaxis?.range;
                 xStart = eventdata['xaxis.range[0]'] || (currentRange ? currentRange[0] : times[0]);
                 xEnd = eventdata['xaxis.range[1]'] || (currentRange ? currentRange[1] : times[times.length - 1]);
@@ -69,7 +90,7 @@ function resizeAllPlotly() {
             // Keep overlay execution axis (x2) aligned with x.
             try {
                 if (window.Plotly && Plotly.relayout) {
-                    if (eventdata['xaxis.autorange']) {
+                    if (eventdata['xaxis.autorange'] || eventdata['xaxis3.autorange']) {
                         Plotly.relayout(graphDiv, { 'xaxis2.autorange': true });
                     } else {
                         Plotly.relayout(graphDiv, { 'xaxis2.range': [xStart, xEnd], 'xaxis2.autorange': false });
@@ -83,15 +104,15 @@ function resizeAllPlotly() {
             const tEnd = _toEpochMs(xEnd);
             const rangeMins = (tEnd - tStart) / 60000;
 
-            // Dynamic bin switching - Updated thresholds: >80m=5min, 40-80m=1min, <40m=30s
+            // Dynamic bin switching - Thresholds: >160m=5min, 80-160m=2min, 40-80m=1min, <40m=30s
             if (window.Shiny && !Number.isNaN(rangeMins)) {
-                const newBinSize = rangeMins > 80 ? '5min' : (rangeMins >= 40 ? '1min' : '30s');
+                const newBinSize = rangeMins > 160 ? '5min' : (rangeMins > 80 ? '2min' : (rangeMins >= 40 ? '1min' : '30s'));
 
                 if (!graphDiv._lastBinSize) {
                     const layoutRange = graphDiv.layout?.xaxis?.range;
                     if (layoutRange && layoutRange.length === 2) {
                         const initMins = (_toEpochMs(layoutRange[1]) - _toEpochMs(layoutRange[0])) / 60000;
-                        graphDiv._lastBinSize = initMins > 80 ? '5min' : (initMins >= 40 ? '1min' : '30s');
+                        graphDiv._lastBinSize = initMins > 160 ? '5min' : (initMins > 80 ? '2min' : (initMins >= 40 ? '1min' : '30s'));
                     } else {
                         graphDiv._lastBinSize = '5min';
                     }
@@ -148,9 +169,8 @@ function resizeAllPlotly() {
     }
 
     function _pokeRebindSoon() {
-        document.querySelectorAll('.js-plotly-plot').forEach(div => {
-            div._hasRescaling = false;
-        });
+        // Don't clear _hasRescaling - the check in _bindRescaling prevents double-binding.
+        // If Shiny replaces an element, the new element won't have the flag.
         setTimeout(setupRescaling, 250);
         setTimeout(resizeAllPlotly, 350);
     }
@@ -161,13 +181,17 @@ function resizeAllPlotly() {
 
         // Rebind when plotly widgets are added/updated.
         const obs = new MutationObserver((_mutations) => {
-            // Cheap debounce
+            // Quick debounce, but short enough not to miss events
             if (window.__chartRescaleRebindPending) return;
             window.__chartRescaleRebindPending = true;
+            // Try to bind immediately (in case new chart is ready)
+            setupRescaling();
+            // Also schedule a backup in case chart isn't fully initialized yet
             setTimeout(() => {
                 window.__chartRescaleRebindPending = false;
-                _pokeRebindSoon();
-            }, 100);
+                setupRescaling();
+                resizeAllPlotly();
+            }, 50);
         });
         obs.observe(document.body, { childList: true, subtree: true });
 
@@ -187,3 +211,6 @@ function resizeAllPlotly() {
         setTimeout(setupRescaling, 400);
         setTimeout(resizeAllPlotly, 600);
     });
+}
+
+resizeAllPlotly();

@@ -30,9 +30,12 @@ function setupRescaling() {
         }, 50);
 
         graphDiv.on('plotly_relayout', function (eventdata) {
+            // Detect changes on MAIN axis (xaxis) or SLIDER axis (xaxis3)
             const isXChange = eventdata['xaxis.range[0]'] || eventdata['xaxis.range[1]'] ||
                 eventdata['xaxis.range'] || eventdata['xaxis.autorange'];
-            if (!isXChange) return;
+            const isX3Change = eventdata['xaxis3.range[0]'] || eventdata['xaxis3.range[1]'] ||
+                eventdata['xaxis3.range'] || eventdata['xaxis3.autorange'];
+            if (!isXChange && !isX3Change) return;
 
             // Get data from chart traces
             const traces = graphDiv.data;
@@ -43,16 +46,25 @@ function setupRescaling() {
             const asks = traces[1].y;   // Ask prices
 
             let xStart, xEnd;
-            if (eventdata['xaxis.autorange']) {
+            if (eventdata['xaxis.autorange'] || eventdata['xaxis3.autorange']) {
                 xStart = times[0];
                 xEnd = times[times.length - 1];
-            } else if (eventdata['xaxis.range']) {
-                xStart = eventdata['xaxis.range'][0];
-                xEnd = eventdata['xaxis.range'][1];
             } else {
-                const currentRange = graphDiv.layout.xaxis.range;
-                xStart = eventdata['xaxis.range[0]'] || currentRange[0];
-                xEnd = eventdata['xaxis.range[1]'] || currentRange[1];
+                // Prefer reading from layout since matches='x' keeps it updated
+                const currentRange = graphDiv.layout?.xaxis?.range;
+                if (currentRange && currentRange.length === 2) {
+                    xStart = currentRange[0];
+                    xEnd = currentRange[1];
+                } else if (eventdata['xaxis.range']) {
+                    xStart = eventdata['xaxis.range'][0];
+                    xEnd = eventdata['xaxis.range'][1];
+                } else if (eventdata['xaxis3.range']) {
+                    xStart = eventdata['xaxis3.range'][0];
+                    xEnd = eventdata['xaxis3.range'][1];
+                } else {
+                    xStart = eventdata['xaxis.range[0]'] || eventdata['xaxis3.range[0]'] || times[0];
+                    xEnd = eventdata['xaxis.range[1]'] || eventdata['xaxis3.range[1]'] || times[times.length - 1];
+                }
             }
 
             // Keep the overlay execution axis (x2) aligned with x.
@@ -78,10 +90,10 @@ function setupRescaling() {
             const tEnd = toTime(xEnd);
 
             // Send range to Shiny for dynamic binning (Option B)
-            // Thresholds: <40min -> 30s, 40-80min -> 1min, >80min -> 5min
+            // Thresholds: <40min -> 30s, 40-80min -> 1min, 80-160min -> 2min, >160min -> 5min
             const rangeMins = (tEnd - tStart) / 60000;
             if (window.Shiny && !isNaN(rangeMins)) {
-                const newBinSize = rangeMins > 80 ? '5min' : (rangeMins >= 40 ? '1min' : '30s');
+                const newBinSize = rangeMins > 160 ? '5min' : (rangeMins > 80 ? '2min' : (rangeMins >= 40 ? '1min' : '30s'));
                 // Initialize _lastBinSize if not set (e.g., after re-render)
                 if (!graphDiv._lastBinSize) {
                     // Get initial range from layout to determine current bin size
@@ -90,7 +102,7 @@ function setupRescaling() {
                         const initStart = toTime(layoutRange[0]);
                         const initEnd = toTime(layoutRange[1]);
                         const initMins = (initEnd - initStart) / 60000;
-                        graphDiv._lastBinSize = initMins > 80 ? '5min' : (initMins >= 40 ? '1min' : '30s');
+                        graphDiv._lastBinSize = initMins > 160 ? '5min' : (initMins > 80 ? '2min' : (initMins >= 40 ? '1min' : '30s'));
                     } else {
                         graphDiv._lastBinSize = '5min';
                     }

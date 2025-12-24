@@ -33,7 +33,7 @@ def create_order_viz(
 	- data_service: object that provides get_prices/get_executions/get_volume_data
 	- date, ticker, orderid: selection keys
 	- start_time_str, end_time_str: order window (HH:MM)
-	- bin_size: one of "5min" | "1min" | "30s"
+	- bin_size: one of "5min" | "2min" | "1min" | "30s"
 	- is_dark: whether UI is in dark mode
 	- theme_colors: mapping with keys: primary, secondary, body_color, warning, danger
 	- x_range: [start_iso, end_iso] strings for the initial view
@@ -83,12 +83,14 @@ def create_order_viz(
 	stock_data = data_service.get_prices(date, ticker)
 	execution_data = data_service.get_executions(date, orderid)
 
+	# 3 rows: Stock price (row 1), Volume (row 2), Hidden price for rangeslider (row 3)
+	# Row 3 has zero height but its rangeslider shows bid/ask price series
 	fig = make_subplots(
-		rows=2,
+		rows=3,
 		cols=1,
 		shared_xaxes=False,
-		vertical_spacing=0.22,
-		row_heights=[0.55, 0.25],
+		vertical_spacing=0.0,
+		row_heights=[0.55, 0.25, 0.001],  # Row 3 is invisible (just for rangeslider)
 	)
 
 	time_values = stock_data["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
@@ -183,6 +185,10 @@ def create_order_viz(
 		bin_delta = pd.to_timedelta(5, unit="m")
 		time_fmt = "%H:%M"
 		open_bin_time = pd.Timestamp("2025-01-01 09:25:00")
+	elif bin_size == "2min":
+		bin_delta = pd.to_timedelta(2, unit="m")
+		time_fmt = "%H:%M"
+		open_bin_time = pd.Timestamp("2025-01-01 09:28:00")
 	elif bin_size == "1min":
 		bin_delta = pd.to_timedelta(1, unit="m")
 		time_fmt = "%H:%M"
@@ -251,6 +257,56 @@ def create_order_viz(
 			col=1,
 		)
 
+	# Row 3: Hidden price traces for the rangeslider (shows bid/ask in the slider)
+	# These traces render in the rangeslider - the main plot area is near-zero height
+	fig.add_trace(
+		go.Scatter(
+			x=time_values,
+			y=stock_data["Bid"],
+			name="Bid (slider)",
+			mode="lines",
+			line=dict(color=bid_color, width=2, shape="hv"),
+			showlegend=False,
+			hoverinfo="skip",
+		),
+		row=3,
+		col=1,
+	)
+	fig.add_trace(
+		go.Scatter(
+			x=time_values,
+			y=stock_data["Ask"],
+			name="Ask (slider)",
+			mode="lines",
+			line=dict(color=ask_color, width=2, shape="hv"),
+			fill="tonexty",
+			fillcolor=fill_color,
+			showlegend=False,
+			hoverinfo="skip",
+		),
+		row=3,
+		col=1,
+	)
+	# Also add execution bubbles to row 3 so they appear in the rangeslider
+	if not execution_data.empty:
+		slider_exec_times = execution_data["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
+		fig.add_trace(
+			go.Scatter(
+				x=slider_exec_times,
+				y=execution_data["Price"],
+				mode="markers",
+				name="Executions (slider)",
+				marker=dict(
+					size=8,  # Visible in slider
+					color=exec_bubble_color,
+				),
+				showlegend=False,
+				hoverinfo="skip",
+			),
+			row=3,
+			col=1,
+		)
+
 	start_time_full = f"2025-01-01T{start_time_str}:00"
 	end_time_full = f"2025-01-01T{end_time_str}:00"
 
@@ -302,7 +358,7 @@ def create_order_viz(
 			bordercolor=grid_color,
 			borderwidth=1,
 		),
-		margin=dict(l=60, r=20, t=10, b=80),
+		margin=dict(l=60, r=20, t=10, b=120),
 		paper_bgcolor="rgba(0,0,0,0)",
 		plot_bgcolor="rgba(0,0,0,0)",
 		font_color=font_color,
@@ -328,6 +384,8 @@ def create_order_viz(
 
 	if bin_size == "5min":
 		min_left_mins = 560
+	elif bin_size == "2min":
+		min_left_mins = 562  # 09:22
 	elif bin_size == "1min":
 		min_left_mins = 565
 	else:
@@ -343,7 +401,7 @@ def create_order_viz(
 		linecolor=grid_color,
 		row=1,
 		col=1,
-		showticklabels=True,
+		showticklabels=False,
 		tickangle=45,
 		tickmode="auto",
 		nticks=20,
@@ -354,11 +412,6 @@ def create_order_viz(
 			{"dtickrange": [None, 60_000], "value": "%H:%M:%S"},
 			{"dtickrange": [60_000, None], "value": "%H:%M"},
 		],
-		rangeslider=dict(
-			visible=True,
-			thickness=0.1,
-			range=x_range_slider,
-		),
 		type="date",
 	)
 
@@ -378,6 +431,34 @@ def create_order_viz(
 		],
 		matches="x",
 		type="date",
+	)
+
+	# Row 3: Hidden chart area but visible rangeslider showing price data
+	fig.update_xaxes(
+		row=3,
+		col=1,
+		showticklabels=False,
+		showgrid=False,
+		zeroline=False,
+		showline=False,
+		matches="x",
+		range=x_range,
+		autorange=False,
+		type="date",
+		rangeslider=dict(
+			visible=True,
+			thickness=0.12,  # 20% larger than original
+			range=x_range_slider,
+		),
+	)
+	fig.update_yaxes(
+		row=3,
+		col=1,
+		showticklabels=False,
+		showgrid=False,
+		zeroline=False,
+		showline=False,
+		visible=False,
 	)
 
 	if open_x_val:
@@ -417,8 +498,25 @@ def create_order_viz(
 		tickprefix="$",
 		tickformat=".2f",
 		title_text="Price",
+		domain=[0.38, 1.0],  # Row 1: top 62%
 	)
-	fig.update_yaxes(gridcolor=grid_color, linecolor=grid_color, row=2, col=1, title_text="Volume")
+	fig.update_yaxes(
+		gridcolor=grid_color,
+		linecolor=grid_color,
+		row=2,
+		col=1,
+		title_text="Volume",
+		domain=[0.15, 0.38],  # Row 2: right below Row 1, slider pushed lower
+	)
+	fig.update_yaxes(
+		row=3,
+		col=1,
+		domain=[0.0, 0.001],  # Row 3: hidden, rangeslider appears in gap above
+		showticklabels=False,
+		showgrid=False,
+		zeroline=False,
+		showline=False,
+	)
 
 	# Initial y-axis autoscale based on the initial x-axis view window.
 	view_start_dt = pd.to_datetime(x_range[0])
