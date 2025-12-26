@@ -214,3 +214,49 @@ function resizeAllPlotly() {
 }
 
 resizeAllPlotly();
+
+// Debounce search inputs (100ms delay to reduce re-renders on large datasets)
+(function () {
+    function setupSearchDebounce() {
+        const searchInputs = document.querySelectorAll('.search-debounce input[type="text"]');
+        searchInputs.forEach(function (input) {
+            if (input._hasDebounce) return;
+            input._hasDebounce = true;
+
+            let debounceTimer = null;
+            const originalValue = input.value;
+
+            // Override Shiny's default input behavior
+            input.addEventListener('input', function (e) {
+                e.stopImmediatePropagation();
+
+                if (debounceTimer) {
+                    clearTimeout(debounceTimer);
+                }
+
+                debounceTimer = setTimeout(function () {
+                    // Trigger Shiny update after 100ms delay
+                    if (window.Shiny && Shiny.setInputValue) {
+                        Shiny.setInputValue(input.id, input.value);
+                    }
+                }, 100);
+            });
+        });
+    }
+
+    // Setup on DOM ready and observe for dynamic additions
+    document.addEventListener('DOMContentLoaded', function () {
+        setupSearchDebounce();
+
+        // Re-run when Shiny adds new elements
+        const obs = new MutationObserver(function () {
+            setupSearchDebounce();
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+    });
+
+    // Also try immediately (in case DOM is already ready)
+    if (document.readyState !== 'loading') {
+        setupSearchDebounce();
+    }
+})();

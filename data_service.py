@@ -291,9 +291,20 @@ class DataService:
 
         rng = np.random.default_rng(42)
 
-        strategy_choices = rng.choice(["VWAP", "Arrival", "Close"], size=10, p=[0.6, 0.2, 0.2])
+        # 2 orders per country = 20 orders total
+        countries_base = ["US", "DE", "JP", "GB", "FR", "CA", "AU", "BR", "IN", "CN"]
+        countries = [c for c in countries_base for _ in range(2)]  # Duplicate each country
+        num_orders = len(countries)  # 20 orders
 
-        countries = ["US", "DE", "JP", "GB", "FR", "CA", "AU", "BR", "IN", "CN"]
+        strategy_choices = rng.choice(["VWAP", "Arrival", "Close"], size=num_orders, p=[0.6, 0.2, 0.2])
+        
+        # Tickers: 2 per country
+        tickers_base = ["SPY", "EWG", "EWJ", "EWU", "EWQ", "EWC", "EWA", "EWZ", "INDA", "FXI"]
+        tickers_alt = ["QQQ", "DAX", "NKY", "FTSE", "CAC", "TSX", "ASX", "IBV", "NSEI", "SSEC"]
+        tickers = []
+        for i, country in enumerate(countries_base):
+            tickers.append(tickers_base[i])  # First order uses base ticker
+            tickers.append(tickers_alt[i])   # Second order uses alt ticker
         
         # Look up exchange hours for each country
         exch_open_times: list[str] = []
@@ -306,7 +317,7 @@ class DataService:
         # StartTime and EndTime logic - now respects per-country exchange hours
         start_times: list[str] = []
         end_times: list[str] = []
-        for i in range(10):
+        for i in range(num_orders):
             open_t = exch_open_times[i]
             close_t = exch_close_times[i]
             
@@ -337,8 +348,8 @@ class DataService:
             end_times[i] = exch_close_times[i]
 
         # PctADV: 50% probability in [0, 1) and 50% in [1, 10]
-        pct_adv = np.empty(10, dtype=float)
-        mask_small = rng.random(10) < 0.5
+        pct_adv = np.empty(num_orders, dtype=float)
+        mask_small = rng.random(num_orders) < 0.5
         pct_adv[mask_small] = rng.uniform(0.0, 1.0, size=int(mask_small.sum()))
         pct_adv[~mask_small] = rng.uniform(1.0, 10.0, size=int((~mask_small).sum()))
         pct_adv = np.round(pct_adv, 2)
@@ -350,7 +361,7 @@ class DataService:
             return int(parts[0]) * 60 + int(parts[1])
         
         prate = []
-        for i in range(10):
+        for i in range(num_orders):
             order_duration = _time_to_mins(end_times[i]) - _time_to_mins(start_times[i])
             session_duration = _time_to_mins(exch_close_times[i]) - _time_to_mins(exch_open_times[i])
             if session_duration > 0 and order_duration > 0:
@@ -361,12 +372,12 @@ class DataService:
 
         base_orders = pd.DataFrame(
             {
-                "id": range(1, 11),
-                "orderid": [f"oid{10000 + i}" for i in range(1, 11)],
+                "id": range(1, num_orders + 1),
+                "orderid": [f"oid{10000 + i}" for i in range(1, num_orders + 1)],
                 "Country": countries,
-                "Side": rng.choice(["Buy", "Sell"], size=10),
-                "Ticker": ["SPY", "EWG", "EWJ", "EWU", "EWQ", "EWC", "EWA", "EWZ", "INDA", "FXI"],
-                "ExecQty": rng.lognormal(mean=np.log(5000), sigma=1.2, size=10).astype(int).clip(50, 40000),
+                "Side": rng.choice(["Buy", "Sell"], size=num_orders),
+                "Ticker": tickers,
+                "ExecQty": rng.lognormal(mean=np.log(5000), sigma=1.2, size=num_orders).astype(int).clip(50, 40000),
                 "PctADV": pct_adv,
                 "PRate": prate,
                 "Strategy": strategy_choices,
@@ -374,10 +385,10 @@ class DataService:
                 "EndTime": end_times,
                 "ExchOpenTime": exch_open_times,
                 "ExchCloseTime": exch_close_times,
-                "Return": rng.uniform(0, 10, size=10).round(2),
-                "PerfArrival": rng.normal(15, 50, size=10).round(1).clip(-200, 200),
-                "PerfVWAP": rng.normal(3, 15, size=10).round(1).clip(-50, 50),
-                "PerfClose": rng.normal(0, 2, size=10).round(1).clip(-5, 5),
+                "Return": rng.uniform(0, 10, size=num_orders).round(2),
+                "PerfArrival": rng.normal(15, 50, size=num_orders).round(1).clip(-200, 200),
+                "PerfVWAP": rng.normal(3, 15, size=num_orders).round(1).clip(-50, 50),
+                "PerfClose": rng.normal(0, 2, size=num_orders).round(1).clip(-5, 5),
             }
         )
 

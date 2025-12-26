@@ -37,8 +37,14 @@ app_ui = ui.page_navbar(
             ),
             ui.card(
                 ui.card_header("Order Table"),
-                ui.p("Click any order row to see details below."),
+                ui.input_text(
+                    "search_orders",
+                    None,
+                    placeholder="Search orders... (e.g., SPY Buy)",
+                    width="100%",
+                ).add_class("search-debounce"),
                 output_tabulator("orders_table"),
+                ui.output_ui("orders_status"),
             ),
         ),
     ),
@@ -87,11 +93,11 @@ app_ui = ui.page_navbar(
             ),
             col_widths=[2, 10],
         ),
-        ui.include_js("www/chart.js"),
     ),
     title="Order Visualizer",
     header=ui.TagList(
         ui.include_css("www/styles.css"),
+        ui.include_js("www/chart.js"),
         ui.output_ui("theme_tabulator_css"),
         ui.div(
             ui.input_dark_mode(id="dark_mode", mode="light"),
@@ -302,9 +308,100 @@ def server(input, output, session):
         """Generate dynamic CSS for tabulator based on current theme colors."""
         return tables.get_theme_tabulator_css(shiny_theme)
 
+    # Reactive value to track order counts for status display
+    orders_counts = reactive.Value({"total": 0, "matching": 0, "displayed": 0})
+    
+    MAX_DISPLAY_ROWS = 500
+
     @render_tabulator
     def orders_table():
-        return tables.get_orders_table(orders_df.get())
+        df = orders_df.get()
+        total_count = len(df)
+        
+        # Compute Notional before search (it's normally computed in tables.py but we need it for search)
+        if not df.empty and "ExecQty" in df.columns and "AvgPrice" in df.columns:
+            df = df.copy()
+            df["Notional"] = (df["ExecQty"] * df["AvgPrice"]).astype(int)
+        
+        # Apply search filter
+        search_text = input.search_orders() or ""
+        if search_text.strip() and not df.empty:
+            tokens = search_text.lower().split()
+            
+            # Text columns: substring match anywhere
+            text_cols = ["orderid", "Date", "Country", "Side", "Ticker", "Strategy", 
+                        "StartTime", "EndTime"]
+            # Numeric columns: prefix (startswith) match, ignore commas
+            numeric_cols = ["OrderQty", "ExecQty", "Notional"]
+            
+            # Only use columns that exist in the dataframe
+            text_cols = [c for c in text_cols if c in df.columns]
+            numeric_cols = [c for c in numeric_cols if c in df.columns]
+            
+            def row_matches(row):
+                # Build text from text columns (substring match)
+                text_values = " ".join(str(row[c]).lower() for c in text_cols)
+                
+                # Build numeric strings without commas for prefix match
+                numeric_strs = [str(int(row[c])).lower() if pd.notna(row[c]) else "" 
+                               for c in numeric_cols]
+                
+                # Each token must match somewhere
+                for token in tokens:
+                    token_clean = token.replace(",", "")  # User might type with commas
+                    
+                    # Check text columns (substring match)
+                    if token_clean in text_values:
+                        continue
+                    
+                    # Check numeric columns (prefix match - startswith)
+                    if any(num_str.startswith(token_clean) for num_str in numeric_strs):
+                        continue
+                    
+                    # Token didn't match anywhere
+                    return False
+                
+                return True
+            
+            mask = df.apply(row_matches, axis=1)
+            df = df[mask]
+        
+        matching_count = len(df)
+        
+        # Limit to MAX_DISPLAY_ROWS
+        if len(df) > MAX_DISPLAY_ROWS:
+            df = df.head(MAX_DISPLAY_ROWS)
+        
+        displayed_count = len(df)
+        
+        # Update counts for status display
+        orders_counts.set({"total": total_count, "matching": matching_count, "displayed": displayed_count})
+        
+        return tables.get_orders_table(df)
+    
+    @render.ui
+    def orders_status():
+        counts = orders_counts.get()
+        total = counts["total"]
+        matching = counts["matching"]
+        displayed = counts["displayed"]
+        
+        if total == 0:
+            return ui.div()
+        
+        # Build status message
+        if displayed < matching:
+            status_text = f"Displaying first {displayed:,} out of {matching:,} orders matching out of total {total:,} orders"
+        elif matching < total:
+            status_text = f"Displaying {displayed:,} orders matching out of total {total:,} orders"
+        else:
+            status_text = f"Displaying all {total:,} orders"
+        
+        return ui.div(
+            status_text,
+            class_="text-muted small mt-2",
+            style="text-align: right; padding-right: 0.5rem;",
+        )
 
     @render_tabulator
     def order_details_table():
