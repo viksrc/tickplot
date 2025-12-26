@@ -176,14 +176,13 @@ def create_order_viz(
 						execution_data["Bid"].to_numpy(),
 						execution_data["Ask"].to_numpy(),
 						(execution_data["spreadcapture"].to_numpy() * 100.0),
+						execution_data["Size"].to_numpy(),
+						execution_data["Venue"].to_numpy(),
 					)
 				),
 				hovertemplate=(
-					"<b>Execution</b>: %{y:.2f}"
-					"<br>%{text}"
-					"<br>Bid: %{customdata[0]:.2f}"
-					"<br>Ask: %{customdata[1]:.2f}"
-					"<br>SC: %{customdata[2]:.1f}%"
+					"<b>Execution</b>: %{customdata[3]:,} @ %{y:.2f}"
+					"<br>%{customdata[4]} %{customdata[0]:.2f}x%{customdata[1]:.2f} SC: %{customdata[2]:.1f}%"
 					"<extra></extra>"
 				),
 				xaxis="x2",
