@@ -65,19 +65,19 @@ def create_order_viz(
 			return (r, g, bl)
 
 		bid_color = "#2dd4bf"
-		ask_rgb = _mix_hex(warning, danger, 0.30)
+		ask_rgb = _mix_hex(warning, danger, 0.70)
 		ask_color = f"rgb({ask_rgb[0]}, {ask_rgb[1]}, {ask_rgb[2]})"
 		fill_color = f"rgba({ask_rgb[0]}, {ask_rgb[1]}, {ask_rgb[2]}, 0.15)"
-		exec_bubble_color = "rgba(56, 189, 248, 0.7)"
+		exec_bubble_color = "rgba(56, 189, 248, 0.84)"
 		exec_bubble_line = "#38bdf8"
 	else:
 		font_color = body_color
 		grid_color = "rgba(0, 0, 0, 0.1)"
 		volume_color = "rgba(24, 100, 171, 0.6)"
 		bid_color = "#0891b2"
-		ask_color = "#ea580c"
+		ask_color = "#e33e19"
 		fill_color = "rgba(234, 88, 12, 0.1)"
-		exec_bubble_color = "rgba(30, 58, 138, 0.5)"
+		exec_bubble_color = "rgba(30, 58, 138, 0.6)"
 		exec_bubble_line = "rgba(30, 58, 138, 0.8)"
 
 	stock_data = data_service.get_prices(date, ticker)
@@ -246,6 +246,7 @@ def create_order_viz(
 				x=vol_time_values,
 				y=plot_vol["Volume"],
 				name=f"Volume ({bin_size})",
+				offset=0,  # Bars start at x position (shift right)
 				customdata=hover_labels,
 				marker_color=volume_color,
 				marker_line_width=0.5,
@@ -349,16 +350,16 @@ def create_order_viz(
 		bargap=0.2,
 		legend=dict(
 			orientation="h",
-			yanchor="top",
-			y=0.99,
+			yanchor="bottom",
+			y=1.02,
 			xanchor="left",
-			x=0.01,
+			x=0,
 			bgcolor="rgba(30, 41, 59, 0.8)" if is_dark else "rgba(255,255,255,0.8)",
 			font=dict(color=font_color),
 			bordercolor=grid_color,
 			borderwidth=1,
 		),
-		margin=dict(l=60, r=20, t=10, b=120),
+		margin=dict(l=60, r=20, t=50, b=120),
 		paper_bgcolor="rgba(0,0,0,0)",
 		plot_bgcolor="rgba(0,0,0,0)",
 		font_color=font_color,
