@@ -185,8 +185,8 @@ def server(input, output, session):
                 except (IndexError, KeyError):
                     return "5min"
             
-            st_str = row.get('StartTime', '09:30')
-            et_str = row.get('EndTime', '16:00')
+            st_str = row.get('StartTime') or row['ExchOpenTime']
+            et_str = row.get('EndTime') or row['ExchCloseTime']
             try:
                 st_parts = st_str.split(":")
                 et_parts = et_str.split(":")
@@ -765,9 +765,11 @@ def server(input, output, session):
         orderid = str(row.get("orderid", ""))
         order_detail = DATA_SERVICE.get_order_detail(date, orderid)
         
-        ticker = str(order_detail.get("Ticker", "SPY"))
-        start_time_str = str(order_detail.get("StartTime", "09:30"))
-        end_time_str = str(order_detail.get("EndTime", "16:00"))
+        ticker = str(order_detail["Ticker"])
+        start_time_str = str(order_detail["StartTime"])
+        end_time_str = str(order_detail["EndTime"])
+        exch_open_time = str(order_detail["ExchOpenTime"])
+        exch_close_time = str(order_detail["ExchCloseTime"])
 
         bin_size = volume_bin_size()
 
@@ -832,6 +834,8 @@ def server(input, output, session):
             is_dark=bool(is_dark),
             theme_colors=theme_colors,
             x_range=[str(x_range[0]), str(x_range[1])],
+            exch_open_time=exch_open_time,
+            exch_close_time=exch_close_time,
         )
 
     @render.text

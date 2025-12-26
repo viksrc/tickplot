@@ -26,6 +26,8 @@ def create_order_viz(
 	is_dark: bool,
 	theme_colors: dict[str, str],
 	x_range: list[str],
+	exch_open_time: str,
+	exch_close_time: str,
 ) -> go.Figure:
 	"""Create the Plotly figure for an order.
 
@@ -37,6 +39,7 @@ def create_order_viz(
 	- is_dark: whether UI is in dark mode
 	- theme_colors: mapping with keys: primary, secondary, body_color, warning, danger
 	- x_range: [start_iso, end_iso] strings for the initial view
+	- exch_open_time, exch_close_time: exchange trading hours (HH:MM)
 	"""
 
 	primary = str(theme_colors.get("primary", "#0d6efd"))
@@ -80,7 +83,7 @@ def create_order_viz(
 		exec_bubble_color = "rgba(30, 58, 138, 0.6)"
 		exec_bubble_line = "rgba(30, 58, 138, 0.8)"
 
-	stock_data = data_service.get_prices(date, ticker)
+	stock_data = data_service.get_prices(date, ticker, exch_open_time, exch_close_time)
 	execution_data = data_service.get_executions(date, orderid)
 
 	# 3 rows: Stock price (row 1), Volume (row 2), Hidden price for rangeslider (row 3)
@@ -171,7 +174,7 @@ def create_order_viz(
 			col=1,
 		)
 
-	volume_df = data_service.get_volume_data(date, ticker, interval=bin_size)
+	volume_df = data_service.get_volume_data(date, ticker, exch_open_time, exch_close_time, interval=bin_size)
 
 	if "Kind" in volume_df.columns:
 		regular_vol = volume_df.loc[volume_df["Kind"] == "Regular"].copy()
@@ -181,24 +184,29 @@ def create_order_viz(
 		auction_vol = volume_df.iloc[0:0].copy()
 
 	plot_vol = regular_vol.copy()
+	
+	# Calculate open_bin_time based on exchange hours and bin size
+	exch_open_dt = pd.to_datetime(f"2025-01-01 {exch_open_time}:00")
+	exch_close_dt = pd.to_datetime(f"2025-01-01 {exch_close_time}:00")
+	
 	if bin_size == "5min":
 		bin_delta = pd.to_timedelta(5, unit="m")
 		time_fmt = "%H:%M"
-		open_bin_time = pd.Timestamp("2025-01-01 09:25:00")
+		open_bin_time = exch_open_dt - pd.Timedelta(minutes=5)
 	elif bin_size == "2min":
 		bin_delta = pd.to_timedelta(2, unit="m")
 		time_fmt = "%H:%M"
-		open_bin_time = pd.Timestamp("2025-01-01 09:28:00")
+		open_bin_time = exch_open_dt - pd.Timedelta(minutes=2)
 	elif bin_size == "1min":
 		bin_delta = pd.to_timedelta(1, unit="m")
 		time_fmt = "%H:%M"
-		open_bin_time = pd.Timestamp("2025-01-01 09:29:00")
+		open_bin_time = exch_open_dt - pd.Timedelta(minutes=1)
 	else:  # 30s
 		bin_delta = pd.to_timedelta(30, unit="s")
 		time_fmt = "%H:%M:%S"
-		open_bin_time = pd.Timestamp("2025-01-01 09:29:30")
+		open_bin_time = exch_open_dt - pd.Timedelta(seconds=30)
 
-	close_bin_time = pd.Timestamp("2025-01-01 16:00:00")
+	close_bin_time = exch_close_dt
 
 	if not plot_vol.empty and "Time" in plot_vol.columns:
 		start_txt = plot_vol["Time"].dt.strftime(time_fmt)
@@ -383,18 +391,22 @@ def create_order_viz(
 
 	fig.update_xaxes(unifiedhovertitle=dict(text=""), row=1, col=1)
 
+	# Calculate rangeslider bounds based on exchange hours
+	exch_open_mins = int(exch_open_time.split(":")[0]) * 60 + int(exch_open_time.split(":")[1])
+	exch_close_mins = int(exch_close_time.split(":")[0]) * 60 + int(exch_close_time.split(":")[1])
+	
 	if bin_size == "5min":
-		min_left_mins = 560
+		min_left_mins = exch_open_mins - 10  # 10 min before open
 	elif bin_size == "2min":
-		min_left_mins = 562  # 09:22
+		min_left_mins = exch_open_mins - 8
 	elif bin_size == "1min":
-		min_left_mins = 565
+		min_left_mins = exch_open_mins - 5
 	else:
-		min_left_mins = 569
+		min_left_mins = exch_open_mins - 1
 
 	x_range_slider = [
 		f"2025-01-01T{min_left_mins // 60:02d}:{min_left_mins % 60:02d}:00",
-		"2025-01-01T16:05:00",
+		f"2025-01-01T{exch_close_mins // 60:02d}:{(exch_close_mins % 60) + 5:02d}:00",
 	]
 
 	fig.update_xaxes(

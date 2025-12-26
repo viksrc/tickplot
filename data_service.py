@@ -52,15 +52,32 @@ def _build_venue_mapping() -> dict[str, dict[str, str]]:
 VENUE_MAPPING: dict[str, dict[str, str]] = _build_venue_mapping()
 
 
+# Country -> (ExchOpenTime, ExchCloseTime) in local exchange time (HH:MM format)
+EXCHANGE_HOURS: dict[str, tuple[str, str]] = {
+    "US": ("09:30", "16:00"),  # NYSE/NASDAQ
+    "CA": ("09:30", "16:00"),  # TSX
+    "GB": ("08:00", "16:30"),  # LSE
+    "DE": ("09:00", "17:30"),  # Xetra
+    "FR": ("09:00", "17:30"),  # Euronext Paris
+    "JP": ("09:00", "15:00"),  # Tokyo (lunch break ignored)
+    "CN": ("09:30", "15:00"),  # Shanghai (lunch break ignored)
+    "IN": ("09:15", "15:30"),  # NSE India
+    "AU": ("10:00", "16:00"),  # ASX
+    "BR": ("10:00", "17:00"),  # B3
+}
+
+
 def _irregular_time_index(
     *,
     date: str,
+    exch_open_time: str,
+    exch_close_time: str,
     rng: np.random.Generator,
     min_step_s: int = 2,
     max_step_s: int = 25,
 ) -> pd.DatetimeIndex:
-    start_ts = pd.to_datetime(f"{date} 09:30:00")
-    end_ts = pd.to_datetime(f"{date} 16:00:00")
+    start_ts = pd.to_datetime(f"{date} {exch_open_time}:00")
+    end_ts = pd.to_datetime(f"{date} {exch_close_time}:00")
 
     times: list[pd.Timestamp] = [start_ts]
     current = start_ts
@@ -85,6 +102,8 @@ def _generate_stock_and_execution_data(
     start_time: str | None,
     end_time: str | None,
     side: str | None,
+    exch_open_time: str,
+    exch_close_time: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Pure simulation function used by the DataService.
 
@@ -96,7 +115,7 @@ def _generate_stock_and_execution_data(
     seed = sum(ord(c) for c in ticker) * 42
     rng = np.random.default_rng(seed)
 
-    time_index = _irregular_time_index(date=date, rng=rng)
+    time_index = _irregular_time_index(date=date, exch_open_time=exch_open_time, exch_close_time=exch_close_time, rng=rng)
     n_points = len(time_index)
 
     base_price = 50 + (seed % 400)
@@ -145,8 +164,12 @@ def _generate_stock_and_execution_data(
             exec_times = pd.to_datetime([first_exec_time] * 50)
         exec_times = pd.Series(exec_times).sort_values().reset_index(drop=True)
     else:
-        exec_offsets_s = exec_rng.integers(0, int(6.5 * 60 * 60) + 1, 50)
-        exec_times = pd.to_datetime(f"{date} 09:30:00") + pd.to_timedelta(exec_offsets_s, unit="s")
+        # Calculate session duration in seconds from exchange hours
+        open_dt = pd.to_datetime(f"{date} {exch_open_time}:00")
+        close_dt = pd.to_datetime(f"{date} {exch_close_time}:00")
+        session_duration_s = int((close_dt - open_dt).total_seconds())
+        exec_offsets_s = exec_rng.integers(0, session_duration_s + 1, 50)
+        exec_times = open_dt + pd.to_timedelta(exec_offsets_s, unit="s")
         exec_times = exec_times.sort_values()
 
     # Sizes
@@ -256,31 +279,48 @@ class DataService:
 
         strategy_choices = rng.choice(["VWAP", "Arrival", "Close"], size=10, p=[0.6, 0.2, 0.2])
 
-        # StartTime and EndTime logic (similar to existing demo)
+        countries = ["US", "DE", "JP", "GB", "FR", "CA", "AU", "BR", "IN", "CN"]
+        
+        # Look up exchange hours for each country
+        exch_open_times: list[str] = []
+        exch_close_times: list[str] = []
+        for country in countries:
+            open_t, close_t = EXCHANGE_HOURS[country]  # Require valid country
+            exch_open_times.append(open_t)
+            exch_close_times.append(close_t)
+
+        # StartTime and EndTime logic - now respects per-country exchange hours
         start_times: list[str] = []
         end_times: list[str] = []
-        for _ in range(10):
+        for i in range(10):
+            open_t = exch_open_times[i]
+            close_t = exch_close_times[i]
+            
+            # Convert to minutes since midnight for random generation
+            open_min = int(open_t.split(":")[0]) * 60 + int(open_t.split(":")[1])
+            close_min = int(close_t.split(":")[0]) * 60 + int(close_t.split(":")[1])
+            
             if rng.random() < 0.5:
-                st_min = 570
+                st_min = open_min
             else:
-                st_min = int(rng.integers(570, 901))
+                st_min = int(rng.integers(open_min, close_min - 30))  # At least 30 min before close
 
             st = (pd.to_datetime("00:00") + pd.to_timedelta(st_min, unit="m")).time()
 
             if rng.random() < 0.5:
-                et_min = 960
+                et_min = close_min
             else:
-                et_min = int(rng.integers(st_min, 961))
+                et_min = int(rng.integers(st_min + 10, close_min + 1))  # At least 10 min after start
 
             et = (pd.to_datetime("00:00") + pd.to_timedelta(et_min, unit="m")).time()
 
             start_times.append(st.strftime("%H:%M"))
             end_times.append(et.strftime("%H:%M"))
 
-        full_session_n = min(3, len(start_times))
-        for i in range(full_session_n):
-            start_times[i] = "09:30"
-            end_times[i] = "16:00"
+        # Force first 3 orders to full session
+        for i in range(min(3, len(start_times))):
+            start_times[i] = exch_open_times[i]
+            end_times[i] = exch_close_times[i]
 
         # PctADV: 50% probability in [0, 1) and 50% in [1, 10]
         pct_adv = np.empty(10, dtype=float)
@@ -293,7 +333,7 @@ class DataService:
             {
                 "id": range(1, 11),
                 "orderid": [f"oid{10000 + i}" for i in range(1, 11)],
-                "Country": ["US", "DE", "JP", "GB", "FR", "CA", "AU", "BR", "IN", "CN"],
+                "Country": countries,
                 "Side": rng.choice(["Buy", "Sell"], size=10),
                 "Ticker": ["SPY", "EWG", "EWJ", "EWU", "EWQ", "EWC", "EWA", "EWZ", "INDA", "FXI"],
                 "ExecQty": rng.lognormal(mean=np.log(5000), sigma=1.2, size=10).astype(int).clip(50, 40000),
@@ -301,6 +341,8 @@ class DataService:
                 "Strategy": strategy_choices,
                 "StartTime": start_times,
                 "EndTime": end_times,
+                "ExchOpenTime": exch_open_times,
+                "ExchCloseTime": exch_close_times,
                 "Return": rng.uniform(0, 10, size=10).round(2),
                 "PerfArrival": rng.normal(15, 50, size=10).round(1).clip(-200, 200),
                 "PerfVWAP": rng.normal(3, 15, size=10).round(1).clip(-50, 50),
@@ -350,7 +392,10 @@ class DataService:
         self._orders_cache[date] = df
         return df.copy()
 
-    def get_prices(self, date: str, ticker: str) -> pd.DataFrame:
+    def get_prices(
+        self, date: str, ticker: str,
+        exch_open_time: str, exch_close_time: str
+    ) -> pd.DataFrame:
         """Return market prices (bid/ask/size/volume) for a date+ticker."""
 
         key = (str(date), str(ticker))
@@ -365,6 +410,8 @@ class DataService:
             start_time=None,
             end_time=None,
             side=None,
+            exch_open_time=exch_open_time,
+            exch_close_time=exch_close_time,
         )
         self._prices_cache[key] = stock_df
         return stock_df.copy()
@@ -381,6 +428,8 @@ class DataService:
             raise KeyError(f"Unknown orderid: {orderid}")
 
         rec = row.iloc[0].to_dict()
+        exch_open = str(rec["ExchOpenTime"])
+        exch_close = str(rec["ExchCloseTime"])
         _, exec_df = _generate_stock_and_execution_data(
             date=str(date),
             ticker=str(rec.get("Ticker", "SPY")),
@@ -388,22 +437,28 @@ class DataService:
             start_time=str(rec.get("StartTime") or "") or None,
             end_time=str(rec.get("EndTime") or "") or None,
             side=str(rec.get("Side") or "") or None,
+            exch_open_time=exch_open,
+            exch_close_time=exch_close,
         )
 
         self._exec_cache[key] = exec_df
         return exec_df.copy()
 
-    def get_volume_data(self, date: str, ticker: str, interval: str = "1min") -> pd.DataFrame:
+    def get_volume_data(
+        self, date: str, ticker: str,
+        exch_open_time: str, exch_close_time: str,
+        interval: str = "1min"
+    ) -> pd.DataFrame:
         """Return aggregated volume data for a date+ticker at the specified interval.
 
         Includes two synthetic auction points:
-        - Open auction (labeled "Open") at 09:29:30
-        - Close auction (labeled "Close") at 16:00:30
+        - Open auction (labeled "Open") 30 seconds before exchange open
+        - Close auction (labeled "Close") 30 seconds after exchange close
 
         These are intentionally not treated as a full-duration bin; they are point events
         rendered separately in the UI.
         """
-        stock_df = self.get_prices(date, ticker)
+        stock_df = self.get_prices(date, ticker, exch_open_time, exch_close_time)
 
         # Resample to the requested interval
         volume_df = (
@@ -417,23 +472,27 @@ class DataService:
 
         # Synthetic open/close auction volumes (stable per date+ticker)
         # Use regular bin volumes as a baseline, with deterministic multipliers.
-        open_time = pd.to_datetime(f"{date} 09:29:30")
-        close_time = pd.to_datetime(f"{date} 16:00:30")
+        # Calculate auction times relative to exchange hours
+        exch_open_dt = pd.to_datetime(f"{date} {exch_open_time}:00")
+        exch_close_dt = pd.to_datetime(f"{date} {exch_close_time}:00")
+        open_time = exch_open_dt - pd.Timedelta(seconds=30)
+        close_time = exch_close_dt + pd.Timedelta(seconds=30)
 
         seed = (sum(ord(c) for c in str(ticker)) * 1_000_003) + (sum(ord(c) for c in str(date)) * 97)
         rng = np.random.default_rng(seed)
 
-        def _safe_volume_at(label_time: str) -> float:
-            dt = pd.to_datetime(f"{date} {label_time}")
-            match = volume_df.loc[volume_df["Time"] == dt, "Volume"]
+        def _safe_volume_at(label_time: pd.Timestamp) -> float:
+            match = volume_df.loc[volume_df["Time"] == label_time, "Volume"]
             if not match.empty:
                 return float(match.iloc[0])
             if not volume_df.empty:
                 return float(volume_df["Volume"].iloc[0])
             return 0.0
 
-        open_base = _safe_volume_at("09:30:00")
-        close_base = _safe_volume_at("15:59:00")
+        open_base = _safe_volume_at(exch_open_dt)
+        # Get close base from 1 minute before close
+        close_base_dt = exch_close_dt - pd.Timedelta(minutes=1)
+        close_base = _safe_volume_at(close_base_dt)
 
         open_mult = float(rng.uniform(2.0, 4.5))
         close_mult = float(rng.uniform(2.0, 4.5))
