@@ -203,8 +203,8 @@ def create_order_viz(
 	plot_vol = regular_vol.copy()
 	
 	# Calculate open_bin_time based on exchange hours and bin size
-	exch_open_dt = pd.to_datetime(f"2025-01-01 {exch_open_time}:00")
-	exch_close_dt = pd.to_datetime(f"2025-01-01 {exch_close_time}:00")
+	exch_open_dt = pd.to_datetime(f"{date} {exch_open_time}:00")
+	exch_close_dt = pd.to_datetime(f"{date} {exch_close_time}:00")
 	
 	if bin_size == "5min":
 		bin_delta = pd.to_timedelta(5, unit="m")
@@ -385,8 +385,8 @@ def create_order_viz(
 			col=1,
 		)
 
-	start_time_full = f"2025-01-01T{start_time_str}:00"
-	end_time_full = f"2025-01-01T{end_time_str}:00"
+	start_time_full = f"{date}T{start_time_str}:00"
+	end_time_full = f"{date}T{end_time_str}:00"
 
 	bid_min = float(stock_data["Bid"].min()) if not stock_data.empty else 0.0
 	ask_max = float(stock_data["Ask"].max()) if not stock_data.empty else 1.0
