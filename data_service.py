@@ -329,6 +329,22 @@ class DataService:
         pct_adv[~mask_small] = rng.uniform(1.0, 10.0, size=int((~mask_small).sum()))
         pct_adv = np.round(pct_adv, 2)
 
+        # PRate = PctADV / durationfrac
+        # durationfrac = (EndTime - StartTime) / (ExchCloseTime - ExchOpenTime)
+        def _time_to_mins(t: str) -> int:
+            parts = t.split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+        
+        prate = []
+        for i in range(10):
+            order_duration = _time_to_mins(end_times[i]) - _time_to_mins(start_times[i])
+            session_duration = _time_to_mins(exch_close_times[i]) - _time_to_mins(exch_open_times[i])
+            if session_duration > 0 and order_duration > 0:
+                duration_frac = order_duration / session_duration
+                prate.append(round(pct_adv[i] / duration_frac, 2))
+            else:
+                prate.append(pct_adv[i])
+
         base_orders = pd.DataFrame(
             {
                 "id": range(1, 11),
@@ -338,6 +354,7 @@ class DataService:
                 "Ticker": ["SPY", "EWG", "EWJ", "EWU", "EWQ", "EWC", "EWA", "EWZ", "INDA", "FXI"],
                 "ExecQty": rng.lognormal(mean=np.log(5000), sigma=1.2, size=10).astype(int).clip(50, 40000),
                 "PctADV": pct_adv,
+                "PRate": prate,
                 "Strategy": strategy_choices,
                 "StartTime": start_times,
                 "EndTime": end_times,

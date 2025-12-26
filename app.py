@@ -435,6 +435,7 @@ def server(input, output, session):
             "OrderID",
             "ExecQty",
             "PctADV",
+            "PRate",
         ]
 
         all_fields = [
@@ -476,6 +477,14 @@ def server(input, output, session):
                     return f"{float(raw):.2f}%"
                 except (TypeError, ValueError):
                     return ""
+            if field == "PRate":
+                raw = order_detail.get("PRate", row.get("PRate", ""))
+                if isinstance(raw, str):
+                    return raw
+                try:
+                    return f"{float(raw):.2f}%"
+                except (TypeError, ValueError):
+                    return ""
             if field == "SpreadCapture":
                 return f"{spread_capture_pct:.1f}%" if pd.notna(spread_capture_pct) else ""
             if field == "Return":
@@ -500,12 +509,12 @@ def server(input, output, session):
         
         # Shrink the table by default (fewer fields). Keep a cap so "All" doesn't blow up the layout.
         row_count = int(len(order_details))
-        details_height = min(414, max(220, 56 + row_count * 28))
-        # Reduce height by another 15% (stacking with the previous shrink behavior)
-        details_height = int(details_height * 0.85)
-        details_height = max(140, int(details_height * 0.85))
+        details_height = min(450, max(250, 60 + row_count * 30))
+        # Reduce height by 15% to keep compact
+        details_height = int(details_height * 0.90)
+        details_height = max(160, int(details_height * 0.90))
         # Make room for the Venues table (same delta, opposite direction)
-        details_height = max(140, int(details_height) - VENUE_DETAILS_HEIGHT_DELTA_PX)
+        details_height = max(160, int(details_height) - VENUE_DETAILS_HEIGHT_DELTA_PX)
 
         order_options = TableOptions(
             height=details_height,
