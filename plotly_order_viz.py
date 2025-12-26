@@ -550,6 +550,50 @@ def create_order_viz(
 		showline=False,
 		visible=False,
 	)
+	
+	# Add fixed time annotations below the rangeslider (not tied to view range)
+	# These show the full trading session regardless of zoom level
+	slider_y_pos = -0.18  # Below the rangeslider
+	
+	# Calculate the actual slider data range (with padding on both ends)
+	# Parse slider end time to get total minutes
+	slider_end_parts = slider_end_iso.split("T")[1].split(":")
+	slider_end_mins = int(slider_end_parts[0]) * 60 + int(slider_end_parts[1])
+	slider_total_mins = slider_end_mins - min_left_mins
+	
+	# Generate time labels every 30 minutes from open to close
+	time_labels = []
+	
+	# Include open time, then round to 30-min boundaries, then close
+	# Start with exchange open time
+	current_mins = exch_open_mins
+	while current_mins <= exch_close_mins:
+		h, m = divmod(current_mins, 60)
+		time_str = f"{h:02d}:{m:02d}"
+		# Calculate x position as fraction of SLIDER range (accounts for padding)
+		x_pos = (current_mins - min_left_mins) / slider_total_mins if slider_total_mins > 0 else 0
+		time_labels.append((time_str, x_pos))
+		
+		# Move to next 30-min boundary
+		if current_mins == exch_open_mins and exch_open_mins % 30 != 0:
+			# Round up to next 30-min mark
+			current_mins = ((exch_open_mins // 30) + 1) * 30
+		else:
+			current_mins += 30
+	
+	for time_str, x_pos in time_labels:
+		fig.add_annotation(
+			text=time_str,
+			xref="paper",
+			yref="paper",
+			x=x_pos,
+			y=slider_y_pos,
+			showarrow=False,
+			textangle=45,
+			xanchor="left",
+			yanchor="top",
+			font=dict(color=font_color, size=12),
+		)
 
 	if open_x_val:
 		fig.add_annotation(
