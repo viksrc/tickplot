@@ -73,6 +73,7 @@ def create_order_viz(
 		fill_color = f"rgba({ask_rgb[0]}, {ask_rgb[1]}, {ask_rgb[2]}, 0.15)"
 		exec_bubble_color = "rgba(56, 189, 248, 0.84)"
 		exec_bubble_line = "#38bdf8"
+		dark_vol_color = "#6c757d"  # Medium grey for Dark theme
 	else:
 		font_color = body_color
 		grid_color = "rgba(0, 0, 0, 0.1)"
@@ -82,6 +83,7 @@ def create_order_viz(
 		fill_color = "rgba(234, 88, 12, 0.1)"
 		exec_bubble_color = "rgba(30, 58, 138, 0.6)"
 		exec_bubble_line = "rgba(30, 58, 138, 0.8)"
+		dark_vol_color = "#495057"  # Dark grey for Light theme
 
 	stock_data = data_service.get_prices(date, ticker, exch_open_time, exch_close_time)
 	execution_data = data_service.get_executions(date, orderid)
@@ -95,6 +97,8 @@ def create_order_viz(
 		vertical_spacing=0.0,
 		row_heights=[0.55, 0.25, 0.001],  # Row 3 is invisible (just for rangeslider)
 	)
+
+	fig.update_layout(barmode="stack")
 
 	time_values = stock_data["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
 
@@ -131,6 +135,20 @@ def create_order_viz(
 		col=1,
 	)
 
+	# Pre-compute bubble colors based on venue type for executions
+	# Color bubbles based on venue type: Exchange=Lit (volume_color), Dark Pool=Dark (dark_vol_color)
+	# Venues A/B/C are Exchanges, D/E/F are Dark Pools
+	bubble_colors = []
+	bubble_lines = []
+	if not execution_data.empty:
+		for venue in execution_data["Venue"]:
+			if venue in ["D", "E", "F"]:  # Dark Pool
+				bubble_colors.append(dark_vol_color)
+				bubble_lines.append(dark_vol_color)
+			else:  # Exchange (A/B/C)
+				bubble_colors.append(volume_color)
+				bubble_lines.append(volume_color)
+
 	if not execution_data.empty:
 		exec_time_values = execution_data["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
 		min_size, max_size = 9.2, 30
@@ -146,8 +164,8 @@ def create_order_viz(
 				marker=dict(
 					size=bubble_sizes,
 					sizemode="diameter",
-					color=exec_bubble_color,
-					line=dict(width=1, color=exec_bubble_line),
+					color=bubble_colors,
+					line=dict(width=1, color=bubble_lines),
 				),
 				text=[
 					f"Size: {s:,}<br>Venue: {v}"
@@ -229,7 +247,14 @@ def create_order_viz(
 		if auction_df.empty:
 			return
 		auction_total = float(pd.to_numeric(auction_df["Volume"], errors="coerce").fillna(0).sum())
-		row_data = {"Time": target_time, "Volume": auction_total, "HoverLabel": label}
+		# Auctions are 100% Lit, 0% Dark
+		row_data = {
+			"Time": target_time, 
+			"Volume": auction_total, 
+			"LitVolume": auction_total,
+			"DarkVolume": 0,
+			"HoverLabel": label
+		}
 		if "Kind" in plot_vol.columns:
 			row_data["Kind"] = label
 		plot_vol = pd.concat([plot_vol, pd.DataFrame([row_data])], ignore_index=True)
@@ -248,23 +273,67 @@ def create_order_viz(
 			if "HoverLabel" in plot_vol.columns
 			else plot_vol["Time"].dt.strftime("%H:%M").tolist()
 		)
+		
+		# Lit/Dark/Total calculations
+		lit_vols = plot_vol.get("LitVolume", plot_vol["Volume"]).fillna(0).astype(int).tolist()
+		dark_vols = plot_vol.get("DarkVolume", pd.Series(0, index=plot_vol.index)).fillna(0).astype(int).tolist()
+		total_vols = (np.array(lit_vols) + np.array(dark_vols)).tolist()
+		
+		# Calculate %Dark for tooltip
+		pct_dark_list = []
+		for l, d in zip(lit_vols, dark_vols):
+			tot = l + d
+			if tot > 0:
+				pct_dark_list.append(d / tot * 100.0)
+			else:
+				pct_dark_list.append(0.0)
+				
+		custom_data = list(zip(hover_labels, total_vols, pct_dark_list))
+		
+		# Simplified tooltip: time range, Volume, Dark%
+		tooltip_template = (
+			"%{customdata[0]}"
+			"<br>Volume: %{customdata[1]:,}"
+			"<br>Dark%: %{customdata[2]:.1f}%"
+			"<extra></extra>"
+		)
 
+		# Trace 1: Lit Volume (Bottom of stack)
 		fig.add_trace(
 			go.Bar(
 				x=vol_time_values,
-				y=plot_vol["Volume"],
-				name=f"Volume ({bin_size})",
-				offset=0,  # Bars start at x position (shift right)
-				customdata=hover_labels,
+				y=lit_vols,
+				name="Lit Volume",
+				offset=0,
+				customdata=custom_data,
 				marker_color=volume_color,
 				marker_line_width=0.5,
 				marker_line_color=grid_color,
 				showlegend=False,
-				hovertemplate="<b>%{customdata}</b><br>Volume: %{y:,}<extra></extra>",
+				hovertemplate=tooltip_template,
 			),
 			row=2,
 			col=1,
 		)
+		
+		# Trace 2: Dark Volume (Top of stack)
+		if any(v > 0 for v in dark_vols):
+			fig.add_trace(
+				go.Bar(
+					x=vol_time_values,
+					y=dark_vols,
+					name="Dark Volume",
+					offset=0,
+					customdata=custom_data,
+					marker_color=dark_vol_color,
+					marker_line_width=0.5,
+					marker_line_color=grid_color,
+					showlegend=False,
+					hoverinfo="skip",  # Tooltip shown only on Lit trace to avoid duplication
+				),
+				row=2,
+				col=1,
+			)
 
 	# Row 3: Hidden price traces for the rangeslider (shows bid/ask in the slider)
 	# These traces render in the rangeslider - the main plot area is near-zero height
@@ -299,6 +368,7 @@ def create_order_viz(
 	# Also add execution bubbles to row 3 so they appear in the rangeslider
 	if not execution_data.empty:
 		slider_exec_times = execution_data["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
+		# Reuse bubble_colors from main chart (computed earlier)
 		fig.add_trace(
 			go.Scatter(
 				x=slider_exec_times,
@@ -307,7 +377,7 @@ def create_order_viz(
 				name="Executions (slider)",
 				marker=dict(
 					size=8,  # Visible in slider
-					color=exec_bubble_color,
+					color=bubble_colors,  # Same Lit/Dark coloring as main chart
 				),
 				showlegend=False,
 				hoverinfo="skip",
@@ -481,9 +551,10 @@ def create_order_viz(
 			xref="x",
 			yref="y2 domain",
 			text="Open",
-			textangle=30,
+			textangle=45,  # Match Plotly tick label angle
 			showarrow=False,
 			xanchor="center",
+			yshift=4,      # Move up slightly
 			yanchor="top",
 			font=dict(color=font_color, size=12),
 			bgcolor="rgba(0,0,0,0)",
@@ -495,9 +566,11 @@ def create_order_viz(
 			xref="x",
 			yref="y2 domain",
 			text="Close",
-			textangle=30,
+			textangle=45,  # Match Plotly tick label angle
 			showarrow=False,
-			xanchor="center",
+			xanchor="left",
+			xshift=10,  # Extra shift to avoid overlapping with 16:00
+			yshift=4,   # Move up slightly
 			yanchor="top",
 			font=dict(color=font_color, size=12),
 			bgcolor="rgba(0,0,0,0)",

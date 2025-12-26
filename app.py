@@ -622,17 +622,20 @@ def server(input, output, session):
 
             title = f"Lit {lit:.0f}% | Dark {dark:.0f}%"
 
-            def seg(width: float, cls: str) -> str:
+            # Use same colors as volume bars: Lit=blue (#1864ab / rgba(24,100,171,0.8)), Dark=grey (#495057)
+            lit_color = "rgba(24, 100, 171, 0.8)"  # Same as volume_color
+            dark_color = "#495057"  # Same as dark_vol_color
+
+            def seg(width: float, color: str) -> str:
                 if width <= 0.0:
                     return ""
-                return f"<div class='{cls}' style='width:{width:.2f}%; height:100%;'></div>"
+                return f"<div style='width:{width:.2f}%; height:100%; background-color:{color};'></div>"
 
-            # Lit: light blue; Dark: navy-ish blue (Bootstrap primary)
             bar = (
                 "<div style='display:flex; width:100%; height:1.05rem; border-radius:0; overflow:hidden; background: var(--bs-secondary-bg);'"
                 f" title='{title}'>"
-                + seg(lit, "bg-info")
-                + seg(dark, "bg-dark")
+                + seg(lit, lit_color)
+                + seg(dark, dark_color)
                 + "</div>"
                 f"<div class='text-muted' style='font-size:0.75rem; margin-top:0.15rem;'>{title}</div>"
             )
@@ -712,7 +715,8 @@ def server(input, output, session):
 
             pct_val = max(0.0, min(100.0, pct_val))
             is_dark = "Dark" in str(venue_type)
-            bar_cls = "bg-dark" if is_dark else "bg-info"
+            # Use same colors as volume bars: Lit=blue, Dark=grey
+            bar_color = "#495057" if is_dark else "rgba(24, 100, 171, 0.8)"
 
             label = f"{pct_val:.1f}%"
             title = f"{venue_type}: {label}" if venue_type else label
@@ -720,15 +724,14 @@ def server(input, output, session):
             # Keep it one-line tall and readable.
             # Use theme body color for text across all venues for consistency.
             text_style = "color: var(--bs-body-color);"
-            text_cls = ""
 
             safe_title = html.escape(title, quote=True)
             safe_label = html.escape(label, quote=True)
 
             return (
                 f"<div title=\"{safe_title}\" style='position:relative; width:100%; height:1.05rem; border-radius:0; overflow:hidden; background: var(--bs-secondary-bg);'>"
-                f"<div class='{bar_cls}' style='width:{pct_val:.2f}%; height:100%;'></div>"
-                f"<div class='{text_cls}' style='position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:0.75rem; line-height:1; {text_style}'>"
+                f"<div style='width:{pct_val:.2f}%; height:100%; background-color:{bar_color};'></div>"
+                f"<div style='position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:0.75rem; line-height:1; {text_style}'>"
                 f"{safe_label}"
                 "</div>"
                 "</div>"

@@ -104,6 +104,7 @@ def _generate_stock_and_execution_data(
     side: str | None,
     exch_open_time: str,
     exch_close_time: str,
+    country: str = "US",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Pure simulation function used by the DataService.
 
@@ -138,6 +139,19 @@ def _generate_stock_and_execution_data(
             "Volume": volume,
         }
     )
+
+    # Split Volume into Lit/Dark for US orders (Dark ~10-40%)
+    if country == "US":
+        dark_pct = rng.uniform(0.1, 0.5, n_points)
+        dark_vol = (volume * dark_pct).astype(int)
+        lit_vol = volume - dark_vol
+    else:
+        # Non-US: 100% Lit, 0% Dark
+        dark_vol = np.zeros(n_points, dtype=int)
+        lit_vol = volume
+    
+    stock_data["LitVolume"] = lit_vol
+    stock_data["DarkVolume"] = dark_vol
 
     exec_seed = seed + 123
     exec_rng = np.random.default_rng(exec_seed)
@@ -456,6 +470,7 @@ class DataService:
             side=str(rec.get("Side") or "") or None,
             exch_open_time=exch_open,
             exch_close_time=exch_close,
+            country=str(rec.get("Country", "US")),
         )
 
         self._exec_cache[key] = exec_df
@@ -479,7 +494,7 @@ class DataService:
 
         # Resample to the requested interval
         volume_df = (
-            stock_df.set_index("Time")["Volume"]
+            stock_df.set_index("Time")[["Volume", "LitVolume", "DarkVolume"]]
             .resample(interval)
             .sum()
             .reset_index()
@@ -521,11 +536,18 @@ class DataService:
             {
                 "Time": [open_time, close_time],
                 "Volume": [open_vol, close_vol],
+                "LitVolume": [open_vol, close_vol],  # Auctions are 100% Lit
+                "DarkVolume": [0, 0],
                 "Kind": ["Open", "Close"],
             }
         )
 
-        return pd.concat([volume_df, auction_df], ignore_index=True)
+        volume_df = pd.concat([volume_df, auction_df], ignore_index=True)
+        # Fill any NaNs (e.g. if resampling produced empty bins for Lit/Dark)
+        volume_df["LitVolume"] = volume_df["LitVolume"].fillna(0)
+        volume_df["DarkVolume"] = volume_df["DarkVolume"].fillna(0)
+        
+        return volume_df
 
     def get_order_detail(self, date: str, orderid: str) -> dict[str, Any]:
         """Return the base order fields plus a stable demo TraderID."""

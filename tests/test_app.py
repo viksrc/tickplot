@@ -629,3 +629,77 @@ def test_range_slider_yaxis_rescaling(page: Page, app: ShinyAppProc):
     verify(new_y is not None, f"Y-axis range defined after zoom (dbg={dbg})")
     verify(changed, f"Y-axis range adjusted after zoom (dbg={dbg})")
     verify(new_y[1] - new_y[0] <= (init_y[1] - init_y[0]) * 1.5, "Zoomed y-axis span is reasonable")
+
+@pytest.mark.anyio
+def test_volume_split_and_tooltip(page: Page, app: ShinyAppProc):
+    """Verify Lit/Dark stacked volume bars and simplified tooltip format."""
+    LOGGER.info("Starting test_volume_split_and_tooltip")
+    page.goto(app.url)
+
+    # Select first order (US/SPY which has dark volume)
+    orders_table = page.locator("#orders_table")
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row, "Orders table loaded").to_be_visible()
+    first_row.click()
+    
+    # Switch to Chart tab
+    page.get_by_text("Chart", exact=True).click()
+    
+    # Wait for plot to render
+    page.locator(".main-svg").first.wait_for(state="visible", timeout=10000)
+    
+    # Inspect Plotly data directly via JS
+    chart_data = page.evaluate("""() => {
+        const el = document.querySelector('#order_chart .js-plotly-plot');
+        if (!el || !el.data) return null;
+        return el.data.map(trace => ({
+            name: trace.name, 
+            type: trace.type, 
+            hovertemplate: trace.hovertemplate,
+            hoverinfo: trace.hoverinfo,
+            y: trace.y
+        }));
+    }""")
+    
+    verify(chart_data is not None, "Chart data retrieved successfully")
+    
+    # Verify Lit Volume trace exists
+    lit_trace = next((t for t in chart_data if t["name"] == "Lit Volume"), None)
+    verify(lit_trace is not None, "Lit Volume trace exists")
+    verify(lit_trace["type"] == "bar", "Lit Volume is a bar chart")
+    
+    # Verify Dark Volume trace exists (for US order)
+    dark_trace = next((t for t in chart_data if t["name"] == "Dark Volume"), None)
+    verify(dark_trace is not None, "Dark Volume trace exists for US order")
+    verify(dark_trace["type"] == "bar", "Dark Volume is a bar chart")
+    
+    # Verify barmode is stack
+    layout = page.evaluate("""() => {
+        const el = document.querySelector('#order_chart .js-plotly-plot');
+        return el?.layout?.barmode;
+    }""")
+    verify(layout == "stack", f"Layout barmode is 'stack' (got: {layout})")
+    
+    # Verify simplified tooltip format (Volume: and Dark%:) - only on Lit trace
+    lit_ht = lit_trace.get("hovertemplate") or ""
+    verify("Volume:" in lit_ht, "Lit tooltip contains 'Volume:'")
+    verify("Dark%:" in lit_ht, "Lit tooltip contains 'Dark%:'")
+    
+    # Dark trace should have hover disabled to avoid duplication
+    dark_hoverinfo = dark_trace.get("hoverinfo") or ""
+    verify(dark_hoverinfo == "skip", f"Dark trace has hover disabled (hoverinfo='skip', got: '{dark_hoverinfo}')")
+    
+    # Verify dark volume values are within 10-50% range for non-auction bars
+    lit_y = lit_trace.get("y") or []
+    dark_y = dark_trace.get("y") or []
+    
+    # Check a few middle bars (skip first/last which might be auctions)
+    if len(lit_y) > 4 and len(dark_y) > 4:
+        for i in range(2, min(5, len(lit_y) - 2)):
+            lit_val = lit_y[i] or 0
+            dark_val = dark_y[i] or 0
+            total = lit_val + dark_val
+            if total > 0:
+                dark_pct = (dark_val / total) * 100
+                # Should be 10-50% for US orders (with some tolerance)
+                verify(5 <= dark_pct <= 55, f"Bar {i}: Dark% is {dark_pct:.1f}% (expected 10-50% range)")
