@@ -141,7 +141,7 @@ def get_order_details_table(input, data_service) -> Tabulator:
     # Default display excludes Return and Perf*.
     default_fields = [
         "OrderID",
-        "ExecQty",
+        "Broker",
         "PctADV",
         "PRate",
     ]
@@ -149,6 +149,7 @@ def get_order_details_table(input, data_service) -> Tabulator:
     all_fields = [
         "ID",
         *default_fields,
+        "ExecQty",
         "Date",
         "Country",
         "Strategy",
@@ -173,6 +174,8 @@ def get_order_details_table(input, data_service) -> Tabulator:
             return format_display_date(row.get("Date", date))
         if field == "TraderID":
             return trader_id
+        if field == "Broker":
+            return str(row.get("Broker", ""))
         if field in ("Country", "Side", "Ticker", "Strategy", "StartTime", "EndTime"):
             return str(row.get(field, ""))
         if field == "ExecQty":
@@ -368,7 +371,7 @@ def get_fill_detail_table(input, data_service) -> Tabulator:
         layout="fitColumns",
         columns=[
             {"field": "Field", "title": "Field", "hozAlign": "left", "headerSort": False},
-            {"field": "Value", "title": "Value", "hozAlign": "left", "headerSort": False, "formatter": "html"},
+            {"field": "Value", "title": "Value", "hozAlign": "right", "headerSort": False, "formatter": "html"},
         ],
     )
 
@@ -468,7 +471,7 @@ def get_venue_table(input, data_service) -> Tabulator:
         layout="fitColumns",
         columns=[
             {"field": "VenueCell", "title": "Venue", "hozAlign": "center", "formatter": "html", "headerSort": False},
-            {"field": "ExecQty", "title": "Qty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "center", "headerSort": False},
+            {"field": "ExecQty", "title": "Qty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right", "headerSort": False},
             {"field": "PctFillBar", "title": "% Fill", "hozAlign": "left", "formatter": "html", "headerSort": False},
             {"field": "Venue", "visible": False},
             {"field": "PctFill", "visible": False},

@@ -6,10 +6,11 @@ body,
 }
 
 /* Tight cards: remove padding around the card body (tables) */
-.card-tight > .card-body {
+.card-tight>.card-body {
     padding: 0 !important;
 }
-.card-tight > .card-body > * {
+
+.card-tight>.card-body>* {
     margin: 0 !important;
 }
 
@@ -55,6 +56,13 @@ body,
     max-width: 100% !important;
 }
 
+/* Add right padding to right-aligned cells in chart tables */
+#order_details_table .tabulator-cell[style*="right"],
+#fill_detail_table .tabulator-cell[style*="right"],
+#venue_table .tabulator-cell[style*="right"] {
+    padding-right: 0.75rem !important;
+}
+
 /* Navbar tabs: restore pill-style active highlighting */
 .navbar .navbar-nav .nav-link {
     padding: 0.35rem 0.9rem;
@@ -66,12 +74,13 @@ body,
 .card-header .form-check {
     margin-bottom: 0 !important;
 }
+
 .card-header .form-check-label {
     white-space: nowrap;
 }
 
 /* Order Details: use less right padding so the All toggle sits farther right */
-.order-details-card > .card-header {
+.order-details-card>.card-header {
     padding-right: 0 !important;
 }
 
@@ -98,62 +107,77 @@ body,
     --bs-tertiary-bg: #1a2332 !important;
     --bs-secondary-bg: #212d3b !important;
 }
+
 [data-bs-theme="dark"] body,
 [data-bs-theme="dark"] .bslib-page-fill {
     background-color: #0d1b2a !important;
 }
+
 [data-bs-theme="dark"] .card {
     background-color: #1a2332 !important;
     border-color: #2d3a4a !important;
 }
+
 [data-bs-theme="dark"] .card-header {
     background-color: #212d3b !important;
     border-color: #2d3a4a !important;
     color: #e0e0e0 !important;
 }
+
 [data-bs-theme="dark"] .tabulator {
     background-color: #0d1b2a !important;
     border-color: #2d3a4a !important;
     color: #c9d1d9 !important;
 }
+
 [data-bs-theme="dark"] .tabulator-header {
     background-color: #2d3a4a !important;
     color: #e0e0e0 !important;
     border-color: #3d4a5a !important;
 }
+
 [data-bs-theme="dark"] .tabulator-header .tabulator-col {
     background-color: #2d3a4a !important;
     border-color: #3d4a5a !important;
     color: #e0e0e0 !important;
 }
+
 [data-bs-theme="dark"] .tabulator-header .tabulator-col-content {
     color: #e0e0e0 !important;
 }
+
 [data-bs-theme="dark"] .tabulator-tableholder {
     background-color: #0d1b2a !important;
 }
+
 [data-bs-theme="dark"] .tabulator-row {
     background-color: #0d1b2a !important;
     color: #c9d1d9 !important;
 }
+
 [data-bs-theme="dark"] .tabulator-row:nth-child(even) {
     background-color: #1a2332 !important;
 }
+
 [data-bs-theme="dark"] .tabulator-row:hover {
     background-color: #2d3a4a !important;
 }
+
 [data-bs-theme="dark"] .tabulator-row.tabulator-selected {
     background-color: #5c7cfa !important;
 }
+
 [data-bs-theme="dark"] .tabulator-cell {
     border-color: #2d3a4a !important;
     color: #c9d1d9 !important;
 }
+
 [data-bs-theme="dark"] .tabulator-footer {
     background-color: #2d3a4a !important;
     color: #e0e0e0 !important;
     border-color: #3d4a5a !important;
 }
+
 /* Fix progress bar legend text color in dark mode - override inline styles */
 [data-bs-theme="dark"] .tabulator-cell span,
 [data-bs-theme="dark"] .tabulator-cell div {

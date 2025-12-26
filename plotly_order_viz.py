@@ -142,7 +142,7 @@ def create_order_viz(
 	bubble_lines = []
 	if not execution_data.empty:
 		for venue in execution_data["Venue"]:
-			if venue in ["D", "E", "F"]:  # Dark Pool
+			if venue in ["DELT", "ECHO", "FLUX"]:  # Dark Pool
 				bubble_colors.append(dark_vol_color)
 				bubble_lines.append(dark_vol_color)
 			else:  # Exchange (A/B/C)

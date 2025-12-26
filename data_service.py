@@ -16,26 +16,26 @@ import pandas as pd
 def _build_venue_mapping() -> dict[str, dict[str, str]]:
     """Stable (but pseudo-random) venue mapping used for UI tooltips.
 
-    Names are plausible and start with the venue label letter.
-    Types are fixed per spec: A/B/C = Exchange, D/E/F = Dark Pool.
+    Names are plausible and start with the venue label.
+    Types are fixed per spec: APEX/BORL/CBLT = Exchange, DELT/ECHO/FLUX = Dark Pool.
     """
 
     venue_types: dict[str, str] = {
-        "A": "Exchange",
-        "B": "Exchange",
-        "C": "Exchange",
-        "D": "Dark Pool",
-        "E": "Dark Pool",
-        "F": "Dark Pool",
+        "APEX": "Exchange",
+        "BORL": "Exchange",
+        "CBLT": "Exchange",
+        "DELT": "Dark Pool",
+        "ECHO": "Dark Pool",
+        "FLUX": "Dark Pool",
     }
 
     name_options: dict[str, list[str]] = {
-        "A": ["Apex Exchange", "Aurora Exchange", "Atlas Exchange"],
-        "B": ["Boreal Exchange", "Banyan Exchange", "Beacon Exchange"],
-        "C": ["Cobalt Exchange", "Catalyst Exchange", "Cascade Exchange"],
-        "D": ["Delta Dark Pool", "Drift Dark Pool", "Dusk Dark Pool"],
-        "E": ["Eclipse Dark Pool", "Echo Dark Pool", "Everest Dark Pool"],
-        "F": ["Flux Dark Pool", "Fjord Dark Pool", "Fable Dark Pool"],
+        "APEX": ["Apex Exchange", "Aurora Exchange", "Atlas Exchange"],
+        "BORL": ["Boreal Exchange", "Banyan Exchange", "Beacon Exchange"],
+        "CBLT": ["Cobalt Exchange", "Catalyst Exchange", "Cascade Exchange"],
+        "DELT": ["Delta Dark Pool", "Drift Dark Pool", "Dusk Dark Pool"],
+        "ECHO": ["Eclipse Dark Pool", "Echo Dark Pool", "Everest Dark Pool"],
+        "FLUX": ["Flux Dark Pool", "Fjord Dark Pool", "Fable Dark Pool"],
     }
 
     rng = np.random.default_rng(20251221)
@@ -244,8 +244,8 @@ def _generate_stock_and_execution_data(
         np.nan,
     )
 
-    venues = ["A", "B", "C", "D", "E", "F"]
-    # A/B/C are exchanges; D/E/F are dark pools. Keep weights plausible and summing to 1.
+    venues = ["APEX", "BORL", "CBLT", "DELT", "ECHO", "FLUX"]
+    # APEX/BORL/CBLT are exchanges; DELT/ECHO/FLUX are dark pools. Keep weights plausible and summing to 1.
     venue_probs = [0.30, 0.12, 0.12, 0.22, 0.12, 0.12]
     exec_venues = exec_rng.choice(venues, 50, p=venue_probs)
 
@@ -378,6 +378,7 @@ class DataService:
                 "Side": rng.choice(["Buy", "Sell"], size=num_orders),
                 "Ticker": tickers,
                 "ExecQty": rng.lognormal(mean=np.log(5000), sigma=1.2, size=num_orders).astype(int).clip(50, 40000),
+                "Broker": rng.choice(["CITI", "BAML", "MS", "JPM", "UBS"], size=num_orders),
                 "PctADV": pct_adv,
                 "PRate": prate,
                 "Strategy": strategy_choices,
