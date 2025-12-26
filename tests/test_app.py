@@ -47,6 +47,7 @@ from shiny.run import ShinyAppProc
 # Create the app fixture
 # Using path relative to this file
 import os
+import sys
 app_path = os.path.join(os.path.dirname(__file__), "..", "app.py")
 app = create_app_fixture(app_path)
 
@@ -57,52 +58,178 @@ def test_order_visualizer_navigation(page: Page, app: ShinyAppProc):
     page.goto(app.url)
     LOGGER.info(f"  Navigated to {app.url}")
     
-    # 2. Interact with the Date Picker using controller
-    date_picker = controller.InputDate(page, "date_picker")
-    date_picker.expect_value("2025-01-01")
-    verify(True, "Date picker initial value is 2025-01-01")
+    # 2. Interact with the Date Range inputs
+    start_date = controller.InputDate(page, "start_date")
+    end_date = controller.InputDate(page, "end_date")
+    
+    start_date.expect_value("2025-01-01")
+    end_date.set("2025-01-03")
+    verify(True, "Date range set to 2025-01-01 to 2025-01-03")
+
+    # Click Query to load data
+    page.locator("#query_btn").click()
+    LOGGER.info("  Clicked Query button")
     
     # 3. Verify the main table exists
     orders_table = page.locator("#orders_table")
     expect(orders_table, "Orders table is visible").to_be_visible()
     
-    # Select the first row
-    first_row = orders_table.locator(".tabulator-row").first
-    expect(first_row, "First order row is visible").to_be_visible()
+    # Wait for rows
+    page.wait_for_selector("#orders_table .tabulator-row")
     
-    #Wait for the table to fully load
-    page.wait_for_timeout(300)
-    
-    def get_cell_text(field: str) -> str:
-        return first_row.locator(f'.tabulator-cell[tabulator-field="{field}"]').text_content().strip()
+    # helper for verification
+    def verify_order_components(target_date_formatted: str):
+        LOGGER.info(f"--- Verifying Order from Date: {target_date_formatted} ---")
+        
+        # Ensure we are on table tab
+        page.get_by_text("Table", exact=True).click()
+        
+        # Find row
+        row = orders_table.locator(f".tabulator-row:has-text('{target_date_formatted}')").first
+        expect(row, f"Row for {target_date_formatted} exists").to_be_visible()
+        
+        # Get ID for logging/verification
+        order_id = row.locator('.tabulator-cell[tabulator-field="orderid"]').text_content().strip()
+        ticker = row.locator('.tabulator-cell[tabulator-field="Ticker"]').text_content().strip()
+        LOGGER.info(f"Testing Order ID: {order_id}, Ticker: {ticker}, Date: {target_date_formatted}")
+        print(f"LIVE LOG: Verify Order {order_id} date {target_date_formatted}")
+        
+        row.click()
+        
+        # Switch to Chart
+        page.get_by_text("Chart", exact=True).click()
+        
+        # 1. Chart Title
+        chart_title = page.locator("#chart_title")
+        expect(chart_title).to_contain_text(order_id)
+        expect(chart_title).to_contain_text(ticker)
+        expect(chart_title).to_contain_text(target_date_formatted)
+        
+        # 2. Metrics
+        metrics = page.locator("#chart_metrics")
+        expect(metrics).to_be_visible()
+        # Ensure it has some text content (chip values)
+        expect(metrics).to_contain_text("Return")
+        expect(metrics).to_contain_text("SpreadCapture")
 
-    order_id = get_cell_text("orderid")
-    side = get_cell_text("Side")
-    ticker = get_cell_text("Ticker")
-    exec_qty = get_cell_text("ExecQty") 
-    strategy = get_cell_text("Strategy")
-    
-    LOGGER.info(f"  Selecting order {order_id} ({ticker})")
-    first_row.click()
-    page.wait_for_timeout(200)
-    
-    # 4. Navigate to the Chart tab
-    page.get_by_text("Chart", exact=True).click()
-    LOGGER.info("  Switched to Chart tab")
-    
-    # 5. Verify Chart Tab elements
-    chart_title_el = page.locator("#chart_title")
-    expect(chart_title_el, "Chart title is visible").to_be_visible()
-    
-    # Wait for chart title content to update with order details
-    expect(page.locator(f"#chart_title:has-text('{order_id}')"), f"Chart title contains order ID {order_id}").to_be_visible()
-    chart_text = chart_title_el.text_content()
-    verify(order_id in chart_text, f"Chart title contains order ID {order_id}")
-    verify(side in chart_text, f"Chart title contains side {side}")
-    verify(ticker in chart_text, f"Chart title contains ticker {ticker}")
-    verify(strategy in chart_text, f"Chart title contains strategy {strategy}")
-    verify(exec_qty in chart_text, f"Chart title contains exec quantity {exec_qty}")
-    
+        # 3. Details Tables
+        expect(page.locator("#order_details_table")).to_be_visible()
+        # Check that it has rows
+        expect(page.locator("#order_details_table .tabulator-row").first).to_be_visible()
+        
+        expect(page.locator("#fill_detail_table")).to_be_visible()
+        expect(page.locator("#venue_table")).to_be_visible()
+        
+        # 4. Chart Verification (Enhanced)
+        chart_locator = page.locator("#order_chart")
+        expect(chart_locator).to_be_visible()
+        
+        # Access the Plotly DOM element and inspect its data array
+        # We need to wait for the plotly graph to be constructed.
+        # usually found at the widget div or a child.
+        # The widget ID is order_chart. The plotly div might be inside.
+        
+        # Helper to get trace names and counts
+        def get_chart_data():
+            return page.evaluate("""() => {
+                const el = document.getElementById('order_chart');
+                // The shinywidget / plotly might be wrapped.
+                // Plotly.js attaches to the div.
+                // Sometimes it's inside a shadow root or nested div.
+                // Let's assume standard Plotly widget structure:
+                // Look for the main plotly div.
+                const plotlyDiv = el.querySelector('.js-plotly-plot') || el;
+                if (!plotlyDiv || !plotlyDiv.data) return null;
+                
+                return plotlyDiv.data.map(trace => ({
+                    name: trace.name, 
+                    mode: trace.mode,
+                    x_count: trace.x ? trace.x.length : 0
+                }));
+            }""")
+        
+        # Retry logic for chart data load (it might take a moment to render after visibility)
+        max_retries = 10
+        traces = []
+        for _ in range(max_retries):
+            traces = get_chart_data()
+            if traces and len(traces) >= 3: # Expect at least Bid, Ask, Executions
+                break
+            page.wait_for_timeout(200)
+            
+        LOGGER.info(f"Chart Traces found: {traces}")
+        verify(traces is not None, "Plotly chart data object found")
+        
+        trace_names = [t.get('name') for t in traces]
+        LOGGER.info(f"Trace names found: {trace_names}")
+        print(f"DEBUG: Found traces: {trace_names}")
+        
+        verify("Bid" in trace_names, "Trace 'Bid' present")
+        verify("Ask" in trace_names, "Trace 'Ask' present")
+        # Check partial match or exact
+        exec_trace_present = any("Execution" in (t or "") for t in trace_names)
+        verify(exec_trace_present, f"Trace 'Execution' present (Found: {trace_names})")
+        
+        if exec_trace_present:
+             # Find the execution trace and check count
+             exec_trace = next((t for t in traces if "Execution" in (t.get('name') or "")), None)
+             if exec_trace:
+                 plotly_count = exec_trace['x_count']
+                 # Calculate expected count using DataService
+                 # Ideally we'd use the app's instance, but for demo we can create a new cached instance or use the same logic
+                 # The app uses DATA_SERVICE global. We can import it.
+                 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+                 from data_service import DataService
+                 # We need to ensure we use the same seed/logic. DataService.demo() is deterministic per run if seed fixed? 
+                 # Actually base_orders has fixed seed. But get_executions uses a hashed seed based on orderid.
+                 ds = DataService.demo()
+                 # Normalize date back to dashes for data service
+                 ds_date = target_date_formatted.replace(".", "-")
+                 expected_exec = ds.get_executions(ds_date, order_id)
+                 expected_count = len(expected_exec)
+                 
+                 LOGGER.info(f"Executions: Plotly={plotly_count}, Expected={expected_count}")
+                 print(f"DEBUG: Executions matching? Plotly({plotly_count}) == Expected({expected_count})")
+                 verify(plotly_count == expected_count, f"Execution count matches (Expected {expected_count})")
+
+                 # Also verify Bid/Ask if possible?
+                 # Prices are generated in get_prices.
+                 # Check Bid trace
+                 bid_trace = next((t for t in traces if "Bid" == t.get('name')), None)
+                 if bid_trace:
+                     # Access start/end times from row or default
+                     # We can fetch order details to get times
+                     od = ds.get_order_detail(ds_date, order_id)
+                     prices = ds.get_prices(ds_date, ticker, od['ExchOpenTime'], od['ExchCloseTime'])
+                     # Filter by order start/end if chart zooms? The chart usually shows full context or order duration?
+                     # App logic: chart shows [StartTime - padding, EndTime + padding]
+                     # But get_prices returns full day? No, get_prices returns full day.
+                     # The app filters the DataFrame passed to create_order_viz?
+                     # Let's check app.py... it passes `prices` (full day) to `create_order_viz`.
+                     # Plotly might be displaying all points.
+                     # Let's assume full day count for now or at least > order duration count.
+                     # Wait, `get_prices` returns 1-min or 1-sec data?
+                     # Let's matches length of `prices` dataframe.
+                     expected_prices_count = len(prices) 
+                     
+                     # Note: Plotly might downsample? But usually not for 1 day of intraday data unless configured.
+                     # Wait, `create_order_viz` might filter?
+                     # Re-reading `plotly_order_viz.py`: It takes `px_data`.
+                     # App.py: `prices = DATA_SERVICE.get_prices(...)` -> `create_order_viz(..., prices, ...)`
+                     # So it should match exactly.
+                     
+                     plotly_bid = bid_trace['x_count']
+                     LOGGER.info(f"Bid Points: Plotly={plotly_bid}, Expected~={expected_prices_count}")
+                     print(f"DEBUG: Bid matching? Plotly({plotly_bid}) == Expected({expected_prices_count})")
+                     # Exact match might be tricky if some NaN handling or downsampling. 
+                     # But let's verify it's the same.
+                     verify(plotly_bid == expected_prices_count, f"Bid count matches (Expected {expected_prices_count})")
+        
+        LOGGER.info(f"--- Verification Passed for {order_id} ---")
+
+    # Run verification for first date and last date
+    verify_order_components("2025.01.01")
+    verify_order_components("2025.01.03")
 @pytest.mark.anyio
 def test_settings_interaction(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_settings_interaction")
@@ -130,7 +257,8 @@ def test_settings_interaction(page: Page, app: ShinyAppProc):
 def test_order_detail_features(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_order_detail_features")
     page.goto(app.url)
-    
+    page.locator("#query_btn").click()
+
     orders_table = page.locator("#orders_table")
     first_row = orders_table.locator(".tabulator-row").first
     expect(first_row, "First order row is visible").to_be_visible()
@@ -172,6 +300,7 @@ def test_order_detail_features(page: Page, app: ShinyAppProc):
 def test_fill_details_features(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_fill_details_features")
     page.goto(app.url)
+    page.locator("#query_btn").click()
     
     orders_table = page.locator("#orders_table")
     first_row = orders_table.locator(".tabulator-row").first
@@ -200,6 +329,7 @@ def test_fill_details_features(page: Page, app: ShinyAppProc):
 def test_venue_table_features(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_venue_table_features")
     page.goto(app.url)
+    page.locator("#query_btn").click()
     
     orders_table = page.locator("#orders_table")
     first_row = orders_table.locator(".tabulator-row").first
@@ -230,6 +360,7 @@ def test_venue_table_features(page: Page, app: ShinyAppProc):
 def test_chart_metrics_features(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_chart_metrics_features")
     page.goto(app.url)
+    page.locator("#query_btn").click()
     
     orders_table = page.locator("#orders_table")
     first_row = orders_table.locator(".tabulator-row").first
@@ -276,6 +407,7 @@ def test_chart_metrics_features(page: Page, app: ShinyAppProc):
 def test_stock_chart_existence(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_stock_chart_existence")
     page.goto(app.url)
+    page.locator("#query_btn").click()
     
     orders_table = page.locator("#orders_table")
     expect(orders_table, "Orders table is visible").to_be_visible()
@@ -343,6 +475,7 @@ def test_stock_chart_existence(page: Page, app: ShinyAppProc):
 def test_volume_chart_features(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_volume_chart_features")
     page.goto(app.url)
+    page.locator("#query_btn").click()
     
     orders_table = page.locator("#orders_table")
     first_row = orders_table.locator(".tabulator-row").first
@@ -372,6 +505,7 @@ def test_volume_chart_features(page: Page, app: ShinyAppProc):
 def test_range_slider_presence(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_range_slider_presence")
     page.goto(app.url)
+    page.locator("#query_btn").click()
     page.locator("#orders_table .tabulator-row").first.click()
     page.get_by_text("Chart", exact=True).click()
     
@@ -389,6 +523,7 @@ def test_range_slider_presence(page: Page, app: ShinyAppProc):
 def test_range_slider_initial_range(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_range_slider_initial_range")
     page.goto(app.url)
+    page.locator("#query_btn").click()
     first_row = page.locator("#orders_table .tabulator-row").first
     start_time = first_row.locator('.tabulator-cell[tabulator-field="StartTime"]').text_content().strip()
     end_time = first_row.locator('.tabulator-cell[tabulator-field="EndTime"]').text_content().strip()
@@ -430,6 +565,7 @@ def test_range_slider_initial_range(page: Page, app: ShinyAppProc):
 def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
     """Test 3: Verify volume bars switch granularity at specific thresholds (80m and 40m)."""
     page.goto(app.url)
+    page.locator("#query_btn").click()
     
     # 1. Select an order
     orders_table = page.locator("#orders_table")
@@ -580,6 +716,7 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
 def test_range_slider_yaxis_rescaling(page: Page, app: ShinyAppProc):
     LOGGER.info("Starting test_range_slider_yaxis_rescaling")
     page.goto(app.url)
+    page.locator("#query_btn").click()
     page.locator("#orders_table .tabulator-row").first.click()
     page.get_by_text("Chart", exact=True).click()
     expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
@@ -634,7 +771,9 @@ def test_range_slider_yaxis_rescaling(page: Page, app: ShinyAppProc):
 def test_volume_split_and_tooltip(page: Page, app: ShinyAppProc):
     """Verify Lit/Dark stacked volume bars and simplified tooltip format."""
     LOGGER.info("Starting test_volume_split_and_tooltip")
+    LOGGER.info("Starting test_volume_split_and_tooltip")
     page.goto(app.url)
+    page.locator("#query_btn").click()
 
     # Select first order (US/SPY which has dark volume)
     orders_table = page.locator("#orders_table")

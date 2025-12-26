@@ -474,8 +474,8 @@ def create_order_viz(
 		min_left_mins = exch_open_mins - 1
 
 	x_range_slider = [
-		f"2025-01-01T{min_left_mins // 60:02d}:{min_left_mins % 60:02d}:00",
-		f"2025-01-01T{exch_close_mins // 60:02d}:{(exch_close_mins % 60) + 5:02d}:00",
+		f"{date}T{min_left_mins // 60:02d}:{min_left_mins % 60:02d}:00",
+		f"{date}T{exch_close_mins // 60:02d}:{(exch_close_mins % 60) + 5:02d}:00",
 	]
 
 	fig.update_xaxes(

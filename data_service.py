@@ -423,6 +423,25 @@ class DataService:
         self._orders_cache[date] = df
         return df.copy()
 
+    def query_orders_range(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """Return orders for a date range (inclusive), simulating a batch query."""
+        try:
+            dates = pd.date_range(start=start_date, end=end_date)
+        except ValueError:
+            # Handle invalid dates or empty range
+            return pd.DataFrame()
+
+        dfs = []
+        for dt in dates:
+            date_str = dt.strftime("%Y-%m-%d")
+            # We use the existing query_orders which generates consistent data for that date
+            dfs.append(self.query_orders(date_str))
+        
+        if not dfs:
+            return pd.DataFrame()
+            
+        return pd.concat(dfs, ignore_index=True)
+
     def get_prices(
         self, date: str, ticker: str,
         exch_open_time: str, exch_close_time: str

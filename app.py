@@ -30,7 +30,9 @@ app_ui = ui.page_navbar(
         "Table",
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_date("date_picker", "Select Date", value="2025-01-01"),
+                ui.input_date("start_date", "Start Date", value="2025-01-01"),
+                ui.input_date("end_date", "End Date", value="2025-01-01"),
+                ui.input_action_button("query_btn", "Query", class_="btn-primary"),
                 width=250,
             ),
             ui.card(
@@ -104,7 +106,38 @@ app_ui = ui.page_navbar(
 def server(input, output, session):
     # Store the user's zoom range when switching bins (non-reactive for tracking)
     _last_bin_size = {"value": "5min"}
+    
+    # Reactive value to hold the orders data
+    orders_df = reactive.Value(pd.DataFrame())
 
+    @reactive.Effect
+    def _fetch_data():
+        # Fetch data on button click, but also run once on startup (by reacting to the inputs initially if we want?)
+        # Or we can just explicitly init orders_df.
+        # But user pattern is usually: inputs -> button -> update.
+        # To show data on load, we can check a flag or just run it.
+        # However, input.query_btn() is 0 initially.
+        
+        # We can use reactive.isolate to read inputs without dependency?
+        # But we want to trigger on button.
+        # Let's check `input.query_btn()`
+        _ = input.query_btn() # Dependency
+        
+        # Isolate inputs to avoid updating on date change without button press
+        with reactive.isolate():
+            start = input.start_date()
+            end = input.end_date()
+        
+        if not start or not end:
+            return
+
+        # Convert to string if necessary, though input_date returns date object
+        start_str = str(start)
+        end_str = str(end)
+        
+        df = DATA_SERVICE.query_orders_range(start_str, end_str)
+        orders_df.set(df)
+        
     @reactive.calc
     def volume_bin_size():
         if "chart_range_mins" not in input:
@@ -114,15 +147,12 @@ def server(input, output, session):
         
         if range_mins is None:
             # Initial state: check the duration of the selected order
-            date = str(input.date_picker())
             row = input.orders_table_row_clicked()
             if not row:
-                try:
-                    row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
-                except (IndexError, KeyError):
-                    return "5min"
+                     # No selection, default to 5min
+                     return "5min"
             
-            st_str = row.get('StartTime') or row['ExchOpenTime']
+            st_str = row.get('StartTime') or row.get('ExchOpenTime', "09:30")
             et_str = row.get('EndTime') or row['ExchCloseTime']
             try:
                 st_parts = st_str.split(":")
@@ -156,10 +186,13 @@ def server(input, output, session):
 
     @render.ui
     def chart_title():
-        date = str(input.date_picker())
         row = input.orders_table_row_clicked()
         if not row:
-            row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
+             return ui.div("No Order Selected", class_="text-muted")
+        
+        # Date comes from row now (might be formatted as YYYY.MM.DD)
+        raw_date = str(row.get("Date"))
+        date = raw_date.replace(".", "-")
 
         order_id = row.get("orderid", "")
         order_detail = DATA_SERVICE.get_order_detail(date, str(order_id))
@@ -196,10 +229,13 @@ def server(input, output, session):
 
     @render.ui
     def chart_metrics():
-        date = str(input.date_picker())
         row = input.orders_table_row_clicked()
         if not row:
-            row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
+             return ui.div()
+
+        # Date comes from row now (might be formatted as YYYY.MM.DD)
+        raw_date = str(row.get("Date"))
+        date = raw_date.replace(".", "-")
 
         orderid = str(row.get("orderid", ""))
         execution_data = DATA_SERVICE.get_executions(date, orderid)
@@ -268,7 +304,7 @@ def server(input, output, session):
 
     @render_tabulator
     def orders_table():
-        return tables.get_orders_table(input, DATA_SERVICE)
+        return tables.get_orders_table(orders_df.get())
 
     @render_tabulator
     def order_details_table():
@@ -286,10 +322,13 @@ def server(input, output, session):
     def order_chart():
         is_dark = input.dark_mode() == "dark"
 
-        date = str(input.date_picker())
         row = input.orders_table_row_clicked()
         if not row:
-            row = DATA_SERVICE.query_orders(date).iloc[0].to_dict()
+             return None 
+        
+        # Date comes from row now (might be formatted as YYYY.MM.DD)
+        raw_date = str(row.get("Date"))
+        date = raw_date.replace(".", "-")
 
         orderid = str(row.get("orderid", ""))
         order_detail = DATA_SERVICE.get_order_detail(date, orderid)
@@ -331,8 +370,8 @@ def server(input, output, session):
         view_start_h, view_start_m = divmod(view_start_mins, 60)
         view_end_h, view_end_m = divmod(view_end_mins, 60)
         default_x_range = [
-            f"2025-01-01T{view_start_h:02d}:{view_start_m:02d}:00",
-            f"2025-01-01T{view_end_h:02d}:{view_end_m:02d}:00",
+            f"{date}T{view_start_h:02d}:{view_start_m:02d}:00",
+            f"{date}T{view_end_h:02d}:{view_end_m:02d}:00",
         ]
 
         # Use x_range from JS if bin size is switching (preserves zoom when switching bins)
