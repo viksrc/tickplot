@@ -842,3 +842,56 @@ def test_volume_split_and_tooltip(page: Page, app: ShinyAppProc):
                 dark_pct = (dark_val / total) * 100
                 # Should be 10-50% for US orders (with some tolerance)
                 verify(5 <= dark_pct <= 55, f"Bar {i}: Dark% is {dark_pct:.1f}% (expected 10-50% range)")
+
+
+def test_slider_exact_range(page: Page) -> None:
+    """TDD: Verify exact X-axis range calculation for slider view."""
+    
+    # 1. Inputs are already present on load
+    # Wait for inputs to be ready
+    page.locator("#start_date input").wait_for(state="visible", timeout=60000)
+    page.locator("#start_date input").fill("2025-01-01")
+    page.locator("#start_date input").press("Enter")
+    
+    page.locator("#end_date input").fill("2025-01-03")
+    page.locator("#end_date input").press("Enter")
+    
+    page.locator("#query_btn").click()
+    expect(page.locator(".tabulator-row").first).to_be_visible()
+
+    # 2. Select Order oid10001 (09:30 - 16:00)
+    # Duration = 390m -> Padding = 30m
+    # Start: 09:30 (570m). ViewStart calculation in app.py:
+    #   if bin_size=5min (default): min_left_mins = exch_open(570) - 10 = 560 (09:20).
+    #   view_start_mins = max(min_left_mins, 570-30=540) = 560.
+    #   So ViewStart must be 09:20.
+    # End: 16:00 (960m). ViewEnd calculation:
+    #   calculated_end = 960 + 30 = 990 (16:30).
+    #   max_view_mins = exch_close(960) + 5 = 965 (16:05).
+    #
+    #   IF FIX IS WORKING: view_end should be 990 (16:30).
+    #   IF FIX IS BROKEN: view_end is clamped to 965 (16:05).
+    
+    # Target Row
+    row = page.locator(".tabulator-row", has_text="oid10001").first
+    row.click()
+    page.locator("a[data-value='Chart']").click()
+    expect(page.locator("#order_chart")).to_be_visible()
+    
+    # 3. Extract Plotly Layout Range for the MAIN X-axis (xaxis, not xaxis2 or 3)
+    range_data = page.evaluate("() => document.getElementById('order_chart').data.layout.xaxis.range")
+    
+    assert range_data is not None, "Could not retrieve xaxis range"
+    print(f"DEBUG: Retrieved Plotly Range: {range_data}")
+    
+    # Expected Strings
+    expected_start = "2025-01-01T09:20:00"
+    expected_end = "2025-01-01T16:30:00"  # This is the correct padded end
+    
+    # Assertions
+    print(f"DEBUG: Expected Start: {expected_start} | Actual: {range_data[0]}")
+    print(f"DEBUG: Expected End:   {expected_end}   | Actual: {range_data[1]}")
+    
+    assert range_data[0] == expected_start, f"Start mismatch! Exp: {expected_start}, Got: {range_data[0]}"
+    assert range_data[1] == expected_end, f"End mismatch! Exp: {expected_end}, Got: {range_data[1]}"
+

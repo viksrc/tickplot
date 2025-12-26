@@ -473,9 +473,17 @@ def create_order_viz(
 	else:
 		min_left_mins = exch_open_mins - 1
 
+	# Default slider end is Exch Close + 5 mins
+	slider_end_iso = f"{date}T{exch_close_mins // 60:02d}:{(exch_close_mins % 60) + 5:02d}:00"
+	
+	# If the initial view (x_range[1]) extends beyond the default slider end (due to padding),
+	# extend the slider to match.
+	if x_range and len(x_range) > 1 and x_range[1] > slider_end_iso:
+		slider_end_iso = x_range[1]
+
 	x_range_slider = [
 		f"{date}T{min_left_mins // 60:02d}:{min_left_mins % 60:02d}:00",
-		f"{date}T{exch_close_mins // 60:02d}:{(exch_close_mins % 60) + 5:02d}:00",
+		slider_end_iso,
 	]
 
 	fig.update_xaxes(
@@ -530,7 +538,7 @@ def create_order_viz(
 		rangeslider=dict(
 			visible=True,
 			thickness=0.12,  # 20% larger than original
-			range=x_range_slider,
+			# No 'range' constraint - allows user to freely scroll entire data range
 		),
 	)
 	fig.update_yaxes(

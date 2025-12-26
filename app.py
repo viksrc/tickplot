@@ -356,16 +356,31 @@ def server(input, output, session):
         else:
             padding_mins = 5
 
+        # Parse exchange hours for dynamic limits
+        exch_open_time = str(order_detail["ExchOpenTime"])
+        exch_close_time = str(order_detail["ExchCloseTime"])
+        eo_parts = exch_open_time.split(":")
+        ec_parts = exch_close_time.split(":")
+        exch_open_mins = int(eo_parts[0]) * 60 + int(eo_parts[1])
+        exch_close_mins = int(ec_parts[0]) * 60 + int(ec_parts[1])
+
         # Add extra left padding so the Open auction bar isn't clipped.
         if bin_size == "5min":
-            min_left_mins = 560  # 09:20
+            min_left_mins = exch_open_mins - 10
         elif bin_size == "1min":
-            min_left_mins = 565  # 09:25
+            min_left_mins = exch_open_mins - 5
         else:  # 30s
-            min_left_mins = 569  # 09:29
+            min_left_mins = exch_open_mins - 1
 
         view_start_mins = max(min_left_mins, st_minutes - padding_mins)
-        view_end_mins = min(965, et_minutes + padding_mins)  # 965 = 16:05 (allow label space)
+        
+        # Dynamic upper bound: Exch Close + 5 mins
+        max_view_mins = exch_close_mins + 5
+        calculated_end = et_minutes + padding_mins
+        
+        # Ensure we don't clip tightly if close to market close, unless strictly closed
+        # trusting calculated padding over ExchClose to avoid cutting off chart
+        view_end_mins = calculated_end
 
         view_start_h, view_start_m = divmod(view_start_mins, 60)
         view_end_h, view_end_m = divmod(view_end_mins, 60)
@@ -374,14 +389,16 @@ def server(input, output, session):
             f"{date}T{view_end_h:02d}:{view_end_m:02d}:00",
         ]
 
-        # Use x_range from JS if bin size is switching (preserves zoom when switching bins)
-        current_bin = bin_size
+        # Always use current slider position if available, only use default on initial load
         x_range = default_x_range
-        if "chart_x_range" in input and current_bin != _last_bin_size["value"]:
+        if "chart_x_range" in input:
             saved_range = input.chart_x_range()
             if saved_range and len(saved_range) == 2:
                 x_range = saved_range
-            _last_bin_size["value"] = current_bin
+        
+        # Track bin size for any future logic that needs it
+        current_bin = bin_size
+        _last_bin_size["value"] = current_bin
 
         theme_colors = {
             "primary": shiny_theme.colors.primary,
