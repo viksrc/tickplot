@@ -74,6 +74,8 @@ def create_order_viz(
 		exec_bubble_color = "rgba(125, 211, 252, 0.95)" # Sky Blue 300, less transparent
 		exec_bubble_line = "#7dd3fc" # Sky Blue 300
 		dark_vol_color = "#7e868e"  # Slightly brighter than #6c757d (~+8%)
+		spike_color = "rgba(255, 255, 255, 0.04)"
+		spike_thickness = 0.5
 	else:
 		font_color = body_color
 		grid_color = "rgba(0, 0, 0, 0.1)"
@@ -84,6 +86,8 @@ def create_order_viz(
 		exec_bubble_color = "rgba(30, 58, 138, 0.6)"
 		exec_bubble_line = "rgba(30, 58, 138, 0.8)"
 		dark_vol_color = "#495057"  # Dark grey for Light theme
+		spike_color = "rgba(0, 0, 0, 0.4)"
+		spike_thickness = 0.5
 
 	stock_data = data_service.get_prices(date, ticker, exch_open_time, exch_close_time)
 	execution_data = data_service.get_executions(date, orderid)
@@ -492,6 +496,9 @@ def create_order_viz(
 		row=1,
 		col=1,
 		showticklabels=False,
+		showgrid=False,
+		showline=False,
+		ticks="",
 		tickangle=45,
 		tickmode="auto",
 		nticks=20,
@@ -503,14 +510,26 @@ def create_order_viz(
 			{"dtickrange": [60_000, None], "value": "%H:%M"},
 		],
 		type="date",
+		showspikes=True,
+		spikemode="across",
+		spikesnap="cursor",
+		spikethickness=spike_thickness,
+		spikedash="solid",
+		spikecolor=spike_color,
 	)
 
 	fig.update_xaxes(
 		gridcolor=grid_color,
-		linecolor=grid_color,
+		linecolor=font_color,
 		row=2,
 		col=1,
 		showticklabels=True,
+		showgrid=False,
+		showline=True,
+		ticks="outside",
+		ticklen=5,
+		tickwidth=1.5,
+		tickcolor=font_color,
 		tickangle=45,
 		tickmode="auto",
 		nticks=20,
@@ -521,6 +540,12 @@ def create_order_viz(
 		],
 		matches="x",
 		type="date",
+		showspikes=True,
+		spikemode="across",
+		spikesnap="cursor",
+		spikethickness=spike_thickness,
+		spikedash="solid",
+		spikecolor=spike_color,
 	)
 
 	# Row 3: Hidden chart area but visible rangeslider showing price data

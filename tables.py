@@ -144,7 +144,6 @@ def get_order_details_table(input, data_service) -> Tabulator:
     default_fields = [
         "OrderID",
         "Broker",
-        "Desk",
         "PctADV",
         "PRate",
     ]
