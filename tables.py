@@ -289,17 +289,23 @@ def get_fill_detail_table(input, data_service) -> Tabulator:
 
         title = f"N {near:.0f}% | M {mid:.0f}% | F {far:.0f}%"
 
-        def seg(width: float, cls: str) -> str:
+        # Use CSS variables for dynamic theme switching
+        # Bid = Near, Ask = Far, Mid = Blue-ish
+        near_color = "var(--color-bid)"
+        mid_color = "var(--color-mid)"
+        far_color = "var(--color-ask)"
+
+        def seg(width: float, color: str) -> str:
             if width <= 0.0:
                 return ""
-            return f"<div class='{cls}' style='width:{width:.2f}%; height:100%;'></div>"
+            return f"<div style='width:{width:.2f}%; height:100%; background-color:{color};'></div>"
 
         bar = (
             "<div style='display:flex; width:100%; height:1.05rem; border-radius:0; overflow:hidden; background: var(--bs-secondary-bg);'"
             f" title='{title}'>"
-            + seg(near, "bg-success")
-            + seg(mid, "bg-primary")
-            + seg(far, "bg-danger")
+            + seg(near, near_color)
+            + seg(mid, mid_color)
+            + seg(far, far_color)
             + "</div>"
             f"<div class='text-muted' style='font-size:0.75rem; margin-top:0.15rem;'>{title}</div>"
         )

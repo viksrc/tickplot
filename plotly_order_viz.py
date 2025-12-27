@@ -71,14 +71,14 @@ def create_order_viz(
 		ask_rgb = _mix_hex(warning, danger, 0.70)
 		ask_color = f"rgb({ask_rgb[0]}, {ask_rgb[1]}, {ask_rgb[2]})"
 		fill_color = f"rgba({ask_rgb[0]}, {ask_rgb[1]}, {ask_rgb[2]}, 0.15)"
-		exec_bubble_color = "rgba(56, 189, 248, 0.84)"
-		exec_bubble_line = "#38bdf8"
-		dark_vol_color = "#6c757d"  # Medium grey for Dark theme
+		exec_bubble_color = "rgba(125, 211, 252, 0.95)" # Sky Blue 300, less transparent
+		exec_bubble_line = "#7dd3fc" # Sky Blue 300
+		dark_vol_color = "#7e868e"  # Slightly brighter than #6c757d (~+8%)
 	else:
 		font_color = body_color
 		grid_color = "rgba(0, 0, 0, 0.1)"
 		volume_color = "rgba(24, 100, 171, 0.6)"
-		bid_color = "#0891b2"
+		bid_color = "#059669"
 		ask_color = "#e33e19"
 		fill_color = "rgba(234, 88, 12, 0.1)"
 		exec_bubble_color = "rgba(30, 58, 138, 0.6)"
@@ -342,7 +342,7 @@ def create_order_viz(
 			y=stock_data["Bid"],
 			name="Bid (slider)",
 			mode="lines",
-			line=dict(color=bid_color, width=2, shape="hv"),
+			line=dict(color=bid_color, width=1, shape="hv"),
 			showlegend=False,
 			hoverinfo="skip",
 		),
@@ -355,7 +355,7 @@ def create_order_viz(
 			y=stock_data["Ask"],
 			name="Ask (slider)",
 			mode="lines",
-			line=dict(color=ask_color, width=2, shape="hv"),
+			line=dict(color=ask_color, width=1, shape="hv"),
 			fill="tonexty",
 			fillcolor=fill_color,
 			showlegend=False,

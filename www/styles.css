@@ -1,6 +1,27 @@
 /* Prevent any widget from forcing page-level horizontal scrolling */
 html,
-body,
+body {
+    /* Light Mode Colors */
+    --color-bid: #059669;
+    /* Emerald Green */
+    --color-ask: #e33e19;
+    /* Burnt Orange */
+    --color-mid: #1d4ed8;
+    /* True Blue-700 */
+}
+
+/* Dark mode overrides */
+[data-bs-theme="dark"] body {
+    /* Dark Mode Colors - Brighter/Lighter for contrast */
+    --color-bid: #2dd4bf;
+    /* Bright Teal */
+    --color-ask: #ff5252;
+    /* Bright Red/Orange */
+    --color-mid: #60a5fa;
+    /* Light Blue */
+}
+
+/* Prevent any widget from forcing page-level horizontal scrolling */
 .bslib-page-fill {
     overflow-x: hidden;
 }
@@ -61,6 +82,18 @@ body,
 #fill_detail_table .tabulator-cell[style*="right"],
 #venue_table .tabulator-cell[style*="right"] {
     padding-right: 0.75rem !important;
+}
+
+/* Light Mode Vertical Borders (Only) */
+html:not([data-bs-theme="dark"]) .tabulator .tabulator-header .tabulator-col,
+html:not([data-bs-theme="dark"]) .tabulator .tabulator-row .tabulator-cell {
+    border-right: 1px solid #e5e7eb !important;
+}
+
+/* Remove right border from last column (Light Mode only) */
+html:not([data-bs-theme="dark"]) .tabulator .tabulator-header .tabulator-col:last-child,
+html:not([data-bs-theme="dark"]) .tabulator .tabulator-row .tabulator-cell:last-child {
+    border-right: none !important;
 }
 
 /* Navbar tabs: restore pill-style active highlighting */
