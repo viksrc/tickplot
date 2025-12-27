@@ -206,7 +206,8 @@ html:not([data-bs-theme="dark"]) .tabulator .tabulator-row .tabulator-cell:last-
 }
 
 [data-bs-theme="dark"] .tabulator-row.tabulator-selected {
-    background-color: #5c7cfa !important;
+    background-color: var(--bs-primary) !important;
+    color: #fff !important;
 }
 
 [data-bs-theme="dark"] .tabulator-cell {
