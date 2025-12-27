@@ -441,30 +441,52 @@ class DataService:
         # Get executions
         exec_df = self.get_executions(date, orderid)
         
+        # Get market documentation (bid/ask) for analytics
+        # Note: get_prices returns the full day, which is what analytics usually need
+        price_df = self.get_prices(
+            date, 
+            str(order_detail.get("Ticker", "SPY")), 
+            str(order_detail["ExchOpenTime"]), 
+            str(order_detail["ExchCloseTime"])
+        )
+        
         # Calculate derived metrics
-        if len(exec_df) > 0:
-            fill_size = int(round(float(exec_df["Size"].mean())))
-            total_qty = float(exec_df["Size"].sum())
-            
-            if total_qty > 0:
-                spread_capture_pct = float((exec_df["spreadcapture"] * exec_df["Size"]).sum() / total_qty) * 100.0
-                avg_price = float((exec_df["Price"] * exec_df["Size"]).sum() / total_qty)
-            else:
-                spread_capture_pct = float("nan")
-                avg_price = float("nan")
-        else:
-            fill_size = 0
-            spread_capture_pct = float("nan")
-            avg_price = float("nan")
+        analytics = self._calculate_analytics(exec_df, price_df)
 
         # Enrich the order dictionary
-        enriched_order = order_detail.copy()
-        enriched_order["FillSize"] = fill_size
-        enriched_order["SpreadCapture"] = spread_capture_pct
-        enriched_order["AvgPrice"] = avg_price
+        enriched_order = {**order_detail, **analytics}
         
         return {
             "order": enriched_order,
+        }
+
+    def _calculate_analytics(self, exec_df: pd.DataFrame, price_df: pd.DataFrame) -> dict[str, Any]:
+        """Perform all quantitative calculations based on both execution and market data."""
+        if len(exec_df) == 0:
+            return {
+                "FillSize": 0,
+                "SpreadCapture": float("nan"),
+                "AvgPrice": float("nan"),
+            }
+
+        fill_size = int(round(float(exec_df["Size"].mean())))
+        total_qty = float(exec_df["Size"].sum())
+        
+        if total_qty > 0:
+            # Weighted average spread capture
+            spread_capture_pct = float((exec_df["spreadcapture"] * exec_df["Size"]).sum() / total_qty) * 100.0
+            # Weighted average price
+            avg_price = float((exec_df["Price"] * exec_df["Size"]).sum() / total_qty)
+        else:
+            spread_capture_pct = float("nan")
+            avg_price = float("nan")
+
+        return {
+            "FillSize": fill_size,
+            "SpreadCapture": spread_capture_pct,
+            "AvgPrice": avg_price,
+            # Placeholder for future analytics: 
+            # "MarketParticipation": total_qty / price_df['Volume'].sum() if not price_df.empty else 0
         }
 
     def get_prices(
