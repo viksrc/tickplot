@@ -50,7 +50,7 @@ def create_order_viz(
 	if is_dark:
 		font_color = "#c9d1d9"
 		grid_color = "rgba(255, 255, 255, 0.1)"
-		volume_color = "rgba(92, 124, 250, 0.6)"
+		volume_color = "rgba(92, 124, 250, 0.95)"
 
 		def _hex_to_rgb(h: str) -> tuple[int, int, int]:
 			h = str(h).lstrip("#")
@@ -79,7 +79,7 @@ def create_order_viz(
 	else:
 		font_color = body_color
 		grid_color = "rgba(0, 0, 0, 0.1)"
-		volume_color = "rgba(24, 100, 171, 0.6)"
+		volume_color = "rgba(24, 100, 171, 0.95)"
 		bid_color = "#059669"
 		ask_color = "#e33e19"
 		fill_color = "rgba(234, 88, 12, 0.1)"
