@@ -29,6 +29,60 @@ def format_display_date(value: object) -> str:
     return dt.strftime("%Y.%m.%d")
 
 
+
+def create_perf_chip(label: str, value: float, is_percentage: bool = False, percentage_decimals: int = 2):
+    """
+    Create a styled performance chip (pill) for display in UI.
+    
+    Args:
+        label: The label text (e.g., "Return", "PerfArrival")
+        value: The numeric value to display.
+        is_percentage: If True, format as %, and positive is Good (Green).
+                       If False, format as bps, and positive is Bad (Red).
+        percentage_decimals: Number of decimals for percentage formatting.
+    """
+    # Handle missing/NaN values
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        color = "secondary"
+        value_str = "—"
+        return ui.span(
+            ui.span(label, class_="fw-medium", style="font-size: 0.75rem; opacity: 0.8; display:block;"),
+            ui.span(value_str, class_="fw-semibold", style="font-size: 0.9rem; display:block;"),
+            class_=f"bg-{color}-subtle text-{color} border border-{color}-subtle rounded",
+            style=(
+                "display:inline-flex; flex-direction:column; align-items:center; justify-content:center; "
+                "text-align:center; line-height:1.1; gap:0.1rem; padding:0.4rem 0.75rem; min-height:2.4rem;"
+            ),
+        )
+
+    if is_percentage:
+        # For Return: positive is good (green)
+        if value > 0:
+            color = "success"
+        else:
+            color = "secondary"
+        value_str = f"{value:.{percentage_decimals}f}%"
+    else:
+        # For Perf metrics (Arrival, VWAP, etc): positive is bad (slippage), negative is good (improvement)
+        if value > 0:
+            color = "danger"
+        elif value < 0:
+            color = "success"
+        else:
+            color = "secondary"
+        value_str = f"{value:+.1f} bps"
+
+    return ui.span(
+        ui.span(label, class_="fw-medium", style="font-size: 0.75rem; opacity: 0.8; display:block;"),
+        ui.span(value_str, class_="fw-semibold", style="font-size: 0.9rem; display:block;"),
+        class_=f"bg-{color}-subtle text-{color} border border-{color}-subtle rounded",
+        style=(
+            "display:inline-flex; flex-direction:column; align-items:center; justify-content:center; "
+            "text-align:center; line-height:1.1; gap:0.1rem; padding:0.4rem 0.75rem; min-height:2.4rem;"
+        ),
+    )
+
+
 def get_orders_table(df: pd.DataFrame) -> Tabulator:
     """Create the main Orders table."""
     df = df.copy()

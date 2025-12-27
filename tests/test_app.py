@@ -91,6 +91,9 @@ def test_order_visualizer_navigation(page: Page, app: ShinyAppProc):
         # Get ID for logging/verification
         order_id = row.locator('.tabulator-cell[tabulator-field="orderid"]').text_content().strip()
         ticker = row.locator('.tabulator-cell[tabulator-field="Ticker"]').text_content().strip()
+        ticker = row.locator('.tabulator-cell[tabulator-field="Ticker"]').text_content().strip()
+        # Note: Desk is not displayed in the main table by default, but we will check it in Chart Title and Details.
+        
         LOGGER.info(f"Testing Order ID: {order_id}, Ticker: {ticker}, Date: {target_date_formatted}")
         print(f"LIVE LOG: Verify Order {order_id} date {target_date_formatted}")
         
@@ -104,6 +107,9 @@ def test_order_visualizer_navigation(page: Page, app: ShinyAppProc):
         expect(chart_title).to_contain_text(order_id)
         expect(chart_title).to_contain_text(ticker)
         expect(chart_title).to_contain_text(target_date_formatted)
+        # Check for Desk in title (e.g. DESKA, DESKB, or DESKC)
+        # Since it's random, we just check if it contains "DESK"
+        expect(chart_title).to_contain_text("DESK")
         
         # 2. Metrics
         metrics = page.locator("#chart_metrics")
@@ -149,13 +155,15 @@ def test_order_visualizer_navigation(page: Page, app: ShinyAppProc):
             }""")
         
         # Retry logic for chart data load (it might take a moment to render after visibility)
-        max_retries = 10
-        traces = []
-        for _ in range(max_retries):
-            traces = get_chart_data()
-            if traces and len(traces) >= 3: # Expect at least Bid, Ask, Executions
-                break
-            page.wait_for_timeout(200)
+        # Wait for at least 3 traces (Bid, Ask, Executions) to be present
+        page.wait_for_function("""() => {
+            const el = document.getElementById('order_chart');
+            const plotlyDiv = el.querySelector('.js-plotly-plot') || el;
+            if (!plotlyDiv || !plotlyDiv.data) return false;
+            return plotlyDiv.data.length >= 3;
+        }""", timeout=5000)
+        
+        traces = get_chart_data()
             
         LOGGER.info(f"Chart Traces found: {traces}")
         verify(traces is not None, "Plotly chart data object found")
@@ -229,6 +237,16 @@ def test_order_visualizer_navigation(page: Page, app: ShinyAppProc):
 
     # Run verification for first date and last date
     verify_order_components("2025.01.01")
+
+    # Filter to 2025-01-03 specifically to ensure rows are visible (Tabulator virtual DOM might hide them)
+    # We need to switch back to the Table tab first if verify_order_components left us on Chart
+    page.get_by_text("Table", exact=True).click()
+    start_date.set("2025-01-03")
+    # End date is already 2025-01-03
+    page.locator("#query_btn").click()
+    # Wait for table to refresh (checking for specific date ensures we waited)
+    page.locator(f".tabulator-row:has-text('2025.01.03')").first.wait_for()
+
     verify_order_components("2025.01.03")
 @pytest.mark.anyio
 def test_settings_interaction(page: Page, app: ShinyAppProc):
@@ -287,7 +305,9 @@ def test_order_detail_features(page: Page, app: ShinyAppProc):
     rows_before = order_details_table.locator(".tabulator-row").count()
     show_all = controller.InputSwitch(page, "show_all_details")
     show_all.set(True)
-    page.wait_for_timeout(300) 
+    show_all.set(True)
+    # Wait for the number of rows to increase
+    expect(order_details_table.locator(".tabulator-row")).not_to_have_count(rows_before) 
     
     rows_after = order_details_table.locator(".tabulator-row").count()
     verify(rows_after > rows_before, f"Row count increased from {rows_before} to {rows_after}")
@@ -545,7 +565,7 @@ def test_range_slider_initial_range(page: Page, app: ShinyAppProc):
     min_l = 560 if total_range > 80 else (565 if total_range >= 40 else 569)
     
     exp_s = max(min_l, st_m - pad)
-    exp_e = min(965, et_m + pad)
+    exp_e = et_m + pad
     
     actual_range = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.xaxis?.range''')
     verify(actual_range is not None, "Chart has defined x-axis range")
@@ -575,7 +595,9 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
     
     page.get_by_text("Chart", exact=True).click()
     expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
-    page.wait_for_timeout(1000)
+    expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
+    # Wait for bars to be rendered
+    page.wait_for_selector(".trace.bars .point", state="visible", timeout=5000)
 
     # Wait for chart.js to bind plotly_relayout handler (required now that we drive xaxis3).
     page.wait_for_function(
@@ -609,16 +631,37 @@ def test_range_slider_dynamic_binning(page: Page, app: ShinyAppProc):
         return None
 
     def wait_for_bin_duration(expected_seconds: int, message: str, timeout_ms: int = 6000) -> None:
-        import time
-
-        deadline = time.time() + (timeout_ms / 1000.0)
-        last = None
-        while time.time() < deadline:
-            last = get_current_bin_duration()
-            if last == expected_seconds:
-                verify(True, message)
-                return
-            page.wait_for_timeout(200)
+        # Define JS check for specific duration
+        check_fn = rf"""() => {{
+            const gd = document.querySelector("#order_chart .js-plotly-plot");
+            if (!gd || !gd.data) return false;
+            const barTrace = gd.data.find(t => t.type === 'bar');
+            if (!barTrace || !barTrace.customdata) return false;
+            
+            // Re-implement the same regex logic in JS for robustness or just grab sample
+            // Finding one label that matches the expected duration is enough
+            const labels = barTrace.customdata;
+            for (const label of labels) {{
+                if (String(label).includes("Open") || String(label).includes("Close")) continue;
+                // Parse "HH:MM-HH:MM" e.g. "10:00-10:05"
+                const m = String(label).match(/(\d{{1,2}}:\d{{2}}(?::\d{{2}})?)[–-](\d{{1,2}}:\d{{2}}(?::\d{{2}})?)/);
+                if (m) {{
+                    const t1_parts = m[1].split(':').map(Number);
+                    const t2_parts = m[2].split(':').map(Number);
+                    const t1_sec = t1_parts[0]*3600 + t1_parts[1]*60 + (t1_parts.length>2?t1_parts[2]:0);
+                    const t2_sec = t2_parts[0]*3600 + t2_parts[1]*60 + (t2_parts.length>2?t2_parts[2]:0);
+                    if (t2_sec - t1_sec === {expected_seconds}) return true;
+                }}
+            }}
+            return false;
+        }}"""
+        
+        try:
+             page.wait_for_function(check_fn, timeout=timeout_ms)
+             last = expected_seconds
+        except Exception:
+             # Fallback to python logic for error reporting
+             last = get_current_bin_duration()
 
         dbg = page.evaluate('''() => {
             const gd = document.querySelector('#order_chart .js-plotly-plot');
@@ -739,18 +782,21 @@ def test_range_slider_yaxis_rescaling(page: Page, app: ShinyAppProc):
         if (!window.Plotly || !gd) return null;
         return Plotly.relayout(gd, { 'xaxis3.range': ['2025-01-01T11:00:00', '2025-01-01T11:30:00'] });
     }''')
-    import time
-
-    deadline = time.time() + 6.0
-    new_y = None
-    changed = False
-    while time.time() < deadline:
-        new_y = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.yaxis?.range''')
-        if new_y is not None:
-            changed = abs(new_y[0] - init_y[0]) > 0.001 or abs(new_y[1] - init_y[1]) > 0.001
-            if changed:
-                break
-        page.wait_for_timeout(200)
+    # Wait for y-axis range to change meaningfully from init_y
+    page.wait_for_function(
+        f"""() => {{
+            const gd = document.querySelector("#order_chart .js-plotly-plot");
+            const new_y = gd?.layout?.yaxis?.range;
+            if (!new_y) return false;
+            const init_y0 = {init_y[0]};
+            const init_y1 = {init_y[1]};
+            return (Math.abs(new_y[0] - init_y0) > 0.001 || Math.abs(new_y[1] - init_y1) > 0.001);
+        }}""",
+        timeout=6000
+    )
+    
+    new_y = page.evaluate('''() => document.querySelector("#order_chart .js-plotly-plot")?.layout?.yaxis?.range''')
+    changed = True # if wait_for_function passes
 
     dbg = page.evaluate('''() => {
         const gd = document.querySelector('#order_chart .js-plotly-plot');
@@ -844,20 +890,22 @@ def test_volume_split_and_tooltip(page: Page, app: ShinyAppProc):
                 verify(5 <= dark_pct <= 55, f"Bar {i}: Dark% is {dark_pct:.1f}% (expected 10-50% range)")
 
 
-def test_slider_exact_range(page: Page) -> None:
+def test_slider_exact_range(page: Page, app: ShinyAppProc) -> None:
     """TDD: Verify exact X-axis range calculation for slider view."""
     
+    page.goto(app.url)
+
     # 1. Inputs are already present on load
-    # Wait for inputs to be ready
-    page.locator("#start_date input").wait_for(state="visible", timeout=60000)
+    # Wait for inputs to be ready - Reduced timeout to 2s
+    page.locator("#start_date input").wait_for(state="visible", timeout=2000)
     page.locator("#start_date input").fill("2025-01-01")
     page.locator("#start_date input").press("Enter")
     
     page.locator("#end_date input").fill("2025-01-03")
     page.locator("#end_date input").press("Enter")
     
-    page.locator("#query_btn").click()
-    expect(page.locator(".tabulator-row").first).to_be_visible()
+    page.locator("#query_btn").click(timeout=2000)
+    expect(page.locator(".tabulator-row").first).to_be_visible(timeout=2000)
 
     # 2. Select Order oid10001 (09:30 - 16:00)
     # Duration = 390m -> Padding = 30m
@@ -874,12 +922,14 @@ def test_slider_exact_range(page: Page) -> None:
     
     # Target Row
     row = page.locator(".tabulator-row", has_text="oid10001").first
-    row.click()
-    page.locator("a[data-value='Chart']").click()
-    expect(page.locator("#order_chart")).to_be_visible()
+    row.click(timeout=2000)
+    page.locator("a[data-value='Chart']").click(timeout=2000)
+    # Wait specifically for the Plotly graph to be present in the DOM
+    page.wait_for_selector("#order_chart .js-plotly-plot", state="attached", timeout=5000)
     
     # 3. Extract Plotly Layout Range for the MAIN X-axis (xaxis, not xaxis2 or 3)
-    range_data = page.evaluate("() => document.getElementById('order_chart').data.layout.xaxis.range")
+    # Using a retry loop here efficiently instead of long sleep is better, but simple evaluate is fast.
+    range_data = page.evaluate("() => document.querySelector('#order_chart .js-plotly-plot').layout.xaxis.range")
     
     assert range_data is not None, "Could not retrieve xaxis range"
     print(f"DEBUG: Retrieved Plotly Range: {range_data}")

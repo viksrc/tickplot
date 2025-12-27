@@ -254,54 +254,12 @@ def server(input, output, session):
         else:
             spread_capture_pct = float("nan")
 
-        def perf_chip(label: str, value: float, is_percentage: bool = False, percentage_decimals: int = 2):
-            # Positive is bad (red), negative is good (green) for performance metrics
-            if value is None or (isinstance(value, float) and pd.isna(value)):
-                color = "secondary"
-                value_str = "—"
-                return ui.span(
-                    ui.span(label, class_="fw-medium", style="font-size: 0.75rem; opacity: 0.8; display:block;"),
-                    ui.span(value_str, class_="fw-semibold", style="font-size: 0.9rem; display:block;"),
-                    class_=f"bg-{color}-subtle text-{color} border border-{color}-subtle rounded",
-                    style=(
-                        "display:inline-flex; flex-direction:column; align-items:center; justify-content:center; "
-                        "text-align:center; line-height:1.1; gap:0.1rem; padding:0.4rem 0.75rem; min-height:2.4rem;"
-                    ),
-                )
-
-            if is_percentage:
-                # For Return: positive is good (green)
-                if value > 0:
-                    color = "success"
-                else:
-                    color = "secondary"
-                value_str = f"{value:.{percentage_decimals}f}%"
-            else:
-                # For Perf metrics: positive is bad, negative is good
-                if value > 0:
-                    color = "danger"
-                elif value < 0:
-                    color = "success"
-                else:
-                    color = "secondary"
-                value_str = f"{value:+.1f} bps"
-
-            return ui.span(
-                ui.span(label, class_="fw-medium", style="font-size: 0.75rem; opacity: 0.8; display:block;"),
-                ui.span(value_str, class_="fw-semibold", style="font-size: 0.9rem; display:block;"),
-                class_=f"bg-{color}-subtle text-{color} border border-{color}-subtle rounded",
-                style=(
-                    "display:inline-flex; flex-direction:column; align-items:center; justify-content:center; "
-                    "text-align:center; line-height:1.1; gap:0.1rem; padding:0.4rem 0.75rem; min-height:2.4rem;"
-                ),
-            )
-
         return ui.div(
-            perf_chip("Return", float(row.get("Return", 0.0)), is_percentage=True),
-            perf_chip("PerfArrival", float(row.get("PerfArrival", 0.0))),
-            perf_chip("PerfVWAP", float(row.get("PerfVWAP", 0.0))),
-            perf_chip("PerfClose", float(row.get("PerfClose", 0.0))),
-            perf_chip("SpreadCapture", spread_capture_pct, is_percentage=True, percentage_decimals=1),
+            tables.create_perf_chip("Return", float(row.get("Return", 0.0)), is_percentage=True),
+            tables.create_perf_chip("PerfArrival", float(row.get("PerfArrival", 0.0))),
+            tables.create_perf_chip("PerfVWAP", float(row.get("PerfVWAP", 0.0))),
+            tables.create_perf_chip("PerfClose", float(row.get("PerfClose", 0.0))),
+            tables.create_perf_chip("SpreadCapture", spread_capture_pct, is_percentage=True, percentage_decimals=1),
             class_="d-flex gap-2 justify-content-start px-2 py-1",
         )
 
@@ -522,16 +480,6 @@ def server(input, output, session):
             exch_close_time=exch_close_time,
         )
 
-    @render.text
-    def selected_country():
-        row = input.orders_table_row_clicked()
-        if not row:
-            return "Click a row in the table to see order info."
-        
-        return (
-            f"{row.get('Country')} | Ticker: {row.get('Ticker')} | "
-            f"ExecQty: {row.get('ExecQty'):,} | Return: {row.get('Return'):.2f}%"
-        )
 
 
 app = App(app_ui, server)
