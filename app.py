@@ -141,7 +141,7 @@ def server(input, output, session):
         start_str = str(start)
         end_str = str(end)
         
-        df = DATA_SERVICE.query_orders_range(start_str, end_str)
+        df = DATA_SERVICE.query_orders(start_str, end_str)
         orders_df.set(df)
         
     @reactive.calc
@@ -190,28 +190,41 @@ def server(input, output, session):
             return "1min"
         return "30s"
 
-    @render.ui
-    def chart_title():
+    @reactive.calc
+    def current_order_enriched():
         row = input.orders_table_row_clicked()
         if not row:
-             return ui.div("No Order Selected", class_="text-muted")
+            return None
         
-        # Date comes from row now (might be formatted as YYYY.MM.DD)
         raw_date = str(row.get("Date"))
         date = raw_date.replace(".", "-")
+        order_id = str(row.get("orderid", ""))
+        
+        # This will only be called when consumers (Charts/Metrics) are active
+        return DATA_SERVICE.get_order_enriched(date, order_id)
 
-        order_id = row.get("orderid", "")
-        order_detail = DATA_SERVICE.get_order_detail(date, str(order_id))
-        trader_id = str(order_detail.get("TraderID", ""))
-        date = tables.format_display_date(row.get("Date", date))
-        side = row.get("Side", "")
-        ticker = row.get("Ticker", "SPY")
-        country = row.get("Country", "")
-        exec_qty = row.get("ExecQty", 0)
-        avg_price_raw = row.get("AvgPrice", None)
-        strategy = row.get("Strategy", "")
-        start_time = row.get("StartTime", "")
-        end_time = row.get("EndTime", "")
+    @render.ui
+    def chart_title():
+        data = current_order_enriched()
+        if not data:
+             return ui.div("No Order Selected", class_="text-muted")
+        
+        # Use enriched order details
+        order_detail = data["order"]
+        # Basic fields from there or row? row matches order_detail largely but detail is fresher?
+        # Let's use order_detail as source of truth along with row fallback
+        
+        date = tables.format_display_date(order_detail.get("Date"))
+        order_id = order_detail.get("orderid", "")
+        trader_id = order_detail.get("TraderID", "")
+        side = order_detail.get("Side", "")
+        ticker = order_detail.get("Ticker", "SPY")
+        country = order_detail.get("Country", "")
+        exec_qty = order_detail.get("ExecQty", 0)
+        avg_price_raw = order_detail.get("AvgPrice", None)
+        strategy = order_detail.get("Strategy", "")
+        start_time = order_detail.get("StartTime", "")
+        end_time = order_detail.get("EndTime", "")
         desk = str(order_detail.get("Desk", ""))
 
         try:
@@ -237,28 +250,19 @@ def server(input, output, session):
 
     @render.ui
     def chart_metrics():
-        row = input.orders_table_row_clicked()
-        if not row:
+        data = current_order_enriched()
+        if not data:
              return ui.div()
-
-        # Date comes from row now (might be formatted as YYYY.MM.DD)
-        raw_date = str(row.get("Date"))
-        date = raw_date.replace(".", "-")
-
-        orderid = str(row.get("orderid", ""))
-        execution_data = DATA_SERVICE.get_executions(date, orderid)
-
-        total_qty = float(execution_data["Size"].sum())
-        if total_qty > 0:
-            spread_capture_pct = float((execution_data["spreadcapture"] * execution_data["Size"]).sum() / total_qty) * 100.0
-        else:
-            spread_capture_pct = float("nan")
+             
+        order_detail = data["order"]
+        # spread capture is computed in enriched object
+        spread_capture_pct = float(order_detail.get("SpreadCapture", float("nan")))
 
         return ui.div(
-            tables.create_perf_chip("Return", float(row.get("Return", 0.0)), is_percentage=True),
-            tables.create_perf_chip("PerfArrival", float(row.get("PerfArrival", 0.0))),
-            tables.create_perf_chip("PerfVWAP", float(row.get("PerfVWAP", 0.0))),
-            tables.create_perf_chip("PerfClose", float(row.get("PerfClose", 0.0))),
+            tables.create_perf_chip("Return", float(order_detail.get("Return", 0.0)), is_percentage=True),
+            tables.create_perf_chip("PerfArrival", float(order_detail.get("PerfArrival", 0.0))),
+            tables.create_perf_chip("PerfVWAP", float(order_detail.get("PerfVWAP", 0.0))),
+            tables.create_perf_chip("PerfClose", float(order_detail.get("PerfClose", 0.0))),
             tables.create_perf_chip("SpreadCapture", spread_capture_pct, is_percentage=True, percentage_decimals=1),
             class_="d-flex gap-2 justify-content-start px-2 py-1",
         )
@@ -278,10 +282,10 @@ def server(input, output, session):
         df = orders_df.get()
         total_count = len(df)
         
-        # Compute Notional before search (it's normally computed in tables.py but we need it for search)
-        if not df.empty and "ExecQty" in df.columns and "AvgPrice" in df.columns:
-            df = df.copy()
-            df["Notional"] = (df["ExecQty"] * df["AvgPrice"]).astype(int)
+        # We no longer compute Notional here as it requires AvgPrice which is expensive
+        # if not df.empty and "ExecQty" in df.columns and "AvgPrice" in df.columns:
+        #    df = df.copy()
+        #    df["Notional"] = (df["ExecQty"] * df["AvgPrice"]).astype(int)
         
         # Apply search filter
         search_text = input.search_orders() or ""
@@ -292,7 +296,7 @@ def server(input, output, session):
             text_cols = ["orderid", "Date", "Country", "Side", "Ticker", "Strategy", 
                         "StartTime", "EndTime"]
             # Numeric columns: prefix (startswith) match, ignore commas
-            numeric_cols = ["OrderQty", "ExecQty", "Notional"]
+            numeric_cols = ["OrderQty", "ExecQty"]
             
             # Only use columns that exist in the dataframe
             text_cols = [c for c in text_cols if c in df.columns]
@@ -365,30 +369,35 @@ def server(input, output, session):
 
     @render_tabulator
     def order_details_table():
-        return tables.get_order_details_table(input, DATA_SERVICE)
+        data = current_order_enriched()
+        return tables.get_order_details_table(input, data, DATA_SERVICE)
 
     @render_tabulator
     def fill_detail_table():
-        return tables.get_fill_detail_table(input, DATA_SERVICE)
+        data = current_order_enriched()
+        return tables.get_fill_detail_table(input, data, DATA_SERVICE)
 
     @render_tabulator
     def venue_table():
-        return tables.get_venue_table(input, DATA_SERVICE)
+        data = current_order_enriched()
+        return tables.get_venue_table(input, data, DATA_SERVICE)
 
     @render_widget
     def order_chart():
         is_dark = input.dark_mode() == "dark"
 
-        row = input.orders_table_row_clicked()
-        if not row:
+        data = current_order_enriched()
+        if not data:
              return None 
         
-        # Date comes from row now (might be formatted as YYYY.MM.DD)
-        raw_date = str(row.get("Date"))
-        date = raw_date.replace(".", "-")
-
-        orderid = str(row.get("orderid", ""))
-        order_detail = DATA_SERVICE.get_order_detail(date, orderid)
+        order_detail = data["order"]
+        date = str(order_detail.get("Date")).replace(".", "-")
+        orderid = str(order_detail.get("orderid", ""))
+        
+        # We need executions? create_order_viz takes DataService and calls get_executions internally...
+        # We should optimize create_order_viz to take pre-fetched data, OR just let it fetch from cache.
+        # Since DataService caches executions by (date, orderid), calling get_executions again inside create_order_viz is cheap (RAM hit only).
+        # We'll just pass the IDs for now to keep refactor minimal, relying on DataService cache which was populated by get_order_enriched.
         
         ticker = str(order_detail["Ticker"])
         start_time_str = str(order_detail["StartTime"])

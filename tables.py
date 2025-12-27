@@ -87,9 +87,7 @@ def get_orders_table(df: pd.DataFrame) -> Tabulator:
     """Create the main Orders table."""
     df = df.copy()
     
-    # Do not display FillSize in the Orders table (AvgFillSize is shown in Fill Details)
-    if "FillSize" in df.columns:
-        df = df.drop(columns=["FillSize"])
+    # Format dates
     if "Date" in df.columns:
         df["Date"] = df["Date"].map(format_display_date)
     if "PctADV" in df.columns:
@@ -100,11 +98,10 @@ def get_orders_table(df: pd.DataFrame) -> Tabulator:
                 return ""
 
         df["PctADV"] = df["PctADV"].map(_fmt_pct_adv)
-    # Add OrderQty (for now = ExecQty) and Notional (ExecQty * AvgPrice)
+
+    # We only show ExecQty (no OrderQty distinct logic needed if they are same)
     if "ExecQty" in df.columns:
         df["OrderQty"] = df["ExecQty"]
-    if "ExecQty" in df.columns and "AvgPrice" in df.columns:
-        df["Notional"] = (df["ExecQty"] * df["AvgPrice"]).astype(int).round(0)
 
     table_options = TableOptions(
         index="id",
@@ -119,12 +116,8 @@ def get_orders_table(df: pd.DataFrame) -> Tabulator:
             {"field": "Broker", "title": "Broker", "width": 80, "hozAlign": "center"},
             {"field": "Side", "title": "Side", "width": 70, "hozAlign": "center"},
             {"field": "Ticker", "title": "Ticker", "width": 80, "hozAlign": "center"},
-            {"field": "OrderQty", "title": "OrderQty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right", "visible": False},
             {"field": "ExecQty", "title": "ExecQty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right"},
-            {"field": "Notional", "title": "Notional", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right"},
-            {"field": "AvgPrice", "title": "AvgPrice", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 3}, "hozAlign": "right", "visible": False},
             {"field": "PctADV", "title": "PctADV", "hozAlign": "right"},
-            {"field": "SpreadCapture", "title": "SpreadCapture", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 1}, "hozAlign": "right", "visible": False},
             {"field": "Strategy", "title": "Strategy", "width": 90, "hozAlign": "center"},
             {"field": "StartTime", "title": "Start", "width": 70, "hozAlign": "center"},
             {"field": "EndTime", "title": "End", "width": 70, "hozAlign": "center"},
@@ -163,34 +156,29 @@ def get_orders_table(df: pd.DataFrame) -> Tabulator:
         # So we should modify signature to accept default_row context.
         pass
 
-def get_order_details_table(input, data_service) -> Tabulator:
+def get_order_details_table(input, data, data_service) -> Tabulator:
     """Create the Order Details table."""
     
-    # Get selected row from table
-    row = input.orders_table_row_clicked()
-    
-    if not row:
-         # Empty table if no row
-         # We can return empty list or empty dataframe
-         # Tabulator(pd.DataFrame()) renders empty.
-         # But the specific format below expects specific fields. 
-         # We should return a properly structured but empty DF for layout consistency
-         # But simpler: just return empty row behavior
-         row = {} 
-
-    date = str(row.get("Date", "")) # Fallback date if completely empty
-
-    orderid = str(row.get("orderid", ""))
-    order_detail = data_service.get_order_detail(date, orderid)
-    trader_id = str(order_detail.get("TraderID", ""))
-
-    execution_data = data_service.get_executions(date, orderid)
-
-    total_qty = float(execution_data["Size"].sum())
-    if total_qty > 0:
-        spread_capture_pct = float((execution_data["spreadcapture"] * execution_data["Size"]).sum() / total_qty) * 100.0
+    if not data:
+         row = {}
+         enriched_order = {}
     else:
+         enriched_order = data["order"]
+         # We can also look at input.orders_table_row_clicked() if needed, but data has everything.
+         # Actually for consistency let's just use enriched_order
+         row = enriched_order 
+
+    # Fallback if empty data
+    date = str(row.get("Date", "")) 
+    orderid = str(row.get("orderid", ""))
+    trader_id = str(row.get("TraderID", ""))
+
+    # SpreadCapture is already in enriched_order
+    spread_capture_pct = row.get("SpreadCapture") 
+    if spread_capture_pct is None:
         spread_capture_pct = float("nan")
+    else:
+        spread_capture_pct = float(spread_capture_pct)
 
     show_all = bool(input.show_all_details())
 
@@ -237,7 +225,7 @@ def get_order_details_table(input, data_service) -> Tabulator:
         if field == "ExecQty":
             return f"{int(row.get('ExecQty', 0) or 0):,}"
         if field == "PctADV":
-            raw = order_detail.get("PctADV", row.get("PctADV", ""))
+            raw = row.get("PctADV", "")
             if isinstance(raw, str):
                 return raw
             try:
@@ -245,7 +233,7 @@ def get_order_details_table(input, data_service) -> Tabulator:
             except (TypeError, ValueError):
                 return ""
         if field == "PRate":
-            raw = order_detail.get("PRate", row.get("PRate", ""))
+            raw = row.get("PRate", "")
             if isinstance(raw, str):
                 return raw
             try:
@@ -295,23 +283,23 @@ def get_order_details_table(input, data_service) -> Tabulator:
     return Tabulator(order_details, table_options=order_options)
 
 
-def get_fill_detail_table(input, data_service) -> Tabulator:
+def get_fill_detail_table(input, data, data_service) -> Tabulator:
     """Create the Fill Details table."""
     
-    row = input.orders_table_row_clicked()
-    if not row:
-        row = {}
+    if not data:
+        # Empty table
+        return Tabulator(pd.DataFrame(), table_options=TableOptions(height=180))
 
-    date = str(row.get("Date", "")) # Fallback date checks
-
-    orderid = str(row.get("orderid", ""))
+    enriched_order = data["order"]
+    # We can rely on DataService cache for executions since get_order_enriched populated it
+    date = str(enriched_order.get("Date")).replace(".", "-")
+    orderid = str(enriched_order.get("orderid"))
+    
     execution_data = data_service.get_executions(date, orderid)
 
     num_fills = int(len(execution_data))
-    if num_fills > 0:
-        avg_fill_size = int(round(float(execution_data["Size"].mean())))
-    else:
-        avg_fill_size = 0
+    # FillSize is also in enriched_order["FillSize"]
+    avg_fill_size = enriched_order.get("FillSize", 0)
 
     # FillAgg: classify each execution by spread capture
     # Near: SC > 75% ; Far: SC < 25% ; Mid otherwise
@@ -440,16 +428,16 @@ def get_fill_detail_table(input, data_service) -> Tabulator:
     return Tabulator(details, table_options=options)
 
 
-def get_venue_table(input, data_service) -> Tabulator:
+def get_venue_table(input, data, data_service) -> Tabulator:
     """Create the Venues table."""
     
-    row = input.orders_table_row_clicked()
-    if not row:
-        row = {}
+    if not data:
+        return Tabulator(pd.DataFrame(), table_options=TableOptions(height=200))
 
-    date = str(row.get("Date", ""))
+    enriched_order = data["order"]
+    date = str(enriched_order.get("Date")).replace(".", "-")
+    orderid = str(enriched_order.get("orderid"))
 
-    orderid = str(row.get("orderid", ""))
     execution_data = data_service.get_executions(date, orderid)
     
     # Calculate venue quantities and percentages

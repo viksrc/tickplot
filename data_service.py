@@ -396,47 +396,20 @@ class DataService:
 
         return cls(base_orders=base_orders)
 
-    def query_orders(self, date: str) -> pd.DataFrame:
-        """Return all orders for a date, including derived execution metrics."""
+    def _query_orders_for_date(self, date: str) -> pd.DataFrame:
+        """Internal helper to return all orders for a single date."""
 
         if date in self._orders_cache:
             return self._orders_cache[date].copy()
 
         df = self.base_orders.copy()
         df["Date"] = str(date)
-
-        fill_sizes: list[int] = []
-        spreadcaptures: list[float] = []
-        avg_prices: list[float] = []
-
-        for rec in df.to_dict("records"):
-            oid = str(rec["orderid"])
-            exec_df = self.get_executions(date, oid)
-
-            if len(exec_df) > 0:
-                fill_sizes.append(int(round(float(exec_df["Size"].mean()))))
-            else:
-                fill_sizes.append(0)
-
-            total_qty = float(exec_df["Size"].sum())
-            if total_qty > 0:
-                wavg_sc = float((exec_df["spreadcapture"] * exec_df["Size"]).sum() / total_qty)
-                spreadcaptures.append(wavg_sc * 100.0)
-
-                wavg_px = float((exec_df["Price"] * exec_df["Size"]).sum() / total_qty)
-                avg_prices.append(wavg_px)
-            else:
-                spreadcaptures.append(float("nan"))
-                avg_prices.append(float("nan"))
-
-        df["FillSize"] = fill_sizes
-        df["SpreadCapture"] = spreadcaptures
-        df["AvgPrice"] = avg_prices
-
+        
+        # Consistent with get_order_enriched logic
         self._orders_cache[date] = df
         return df.copy()
 
-    def query_orders_range(self, start_date: str, end_date: str) -> pd.DataFrame:
+    def query_orders(self, start_date: str, end_date: str) -> pd.DataFrame:
         """Return orders for a date range (inclusive), simulating a batch query."""
         try:
             dates = pd.date_range(start=start_date, end=end_date)
@@ -447,13 +420,52 @@ class DataService:
         dfs = []
         for dt in dates:
             date_str = dt.strftime("%Y-%m-%d")
-            # We use the existing query_orders which generates consistent data for that date
-            dfs.append(self.query_orders(date_str))
+            dfs.append(self._query_orders_for_date(date_str))
         
         if not dfs:
             return pd.DataFrame()
             
         return pd.concat(dfs, ignore_index=True)
+
+    def get_order_enriched(self, date: str, orderid: str) -> dict[str, Any]:
+        """Return a dictionary containing the enriched order and its execution data.
+        
+        This calculates 'AvgPrice', 'SpreadCapture', 'FillSize' on demand.
+        """
+        # Get base order details
+        try:
+            order_detail = self.get_order(date, orderid)
+        except KeyError:
+            return {}
+
+        # Get executions
+        exec_df = self.get_executions(date, orderid)
+        
+        # Calculate derived metrics
+        if len(exec_df) > 0:
+            fill_size = int(round(float(exec_df["Size"].mean())))
+            total_qty = float(exec_df["Size"].sum())
+            
+            if total_qty > 0:
+                spread_capture_pct = float((exec_df["spreadcapture"] * exec_df["Size"]).sum() / total_qty) * 100.0
+                avg_price = float((exec_df["Price"] * exec_df["Size"]).sum() / total_qty)
+            else:
+                spread_capture_pct = float("nan")
+                avg_price = float("nan")
+        else:
+            fill_size = 0
+            spread_capture_pct = float("nan")
+            avg_price = float("nan")
+
+        # Enrich the order dictionary
+        enriched_order = order_detail.copy()
+        enriched_order["FillSize"] = fill_size
+        enriched_order["SpreadCapture"] = spread_capture_pct
+        enriched_order["AvgPrice"] = avg_price
+        
+        return {
+            "order": enriched_order,
+        }
 
     def get_prices(
         self, date: str, ticker: str,
@@ -581,7 +593,7 @@ class DataService:
         
         return volume_df
 
-    def get_order_detail(self, date: str, orderid: str) -> dict[str, Any]:
+    def get_order(self, date: str, orderid: str) -> dict[str, Any]:
         """Return the base order fields plus a stable demo TraderID."""
 
         row = self.base_orders.loc[self.base_orders["orderid"] == str(orderid)]
