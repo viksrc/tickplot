@@ -379,6 +379,7 @@ class DataService:
                 "Ticker": tickers,
                 "ExecQty": rng.lognormal(mean=np.log(5000), sigma=1.2, size=num_orders).astype(int).clip(50, 40000),
                 "Broker": rng.choice(["CITI", "BAML", "MS", "JPM", "UBS"], size=num_orders),
+                "Desk": rng.choice(["DESKA", "DESKB", "DESKC"], size=num_orders),
                 "PctADV": pct_adv,
                 "PRate": prate,
                 "Strategy": strategy_choices,

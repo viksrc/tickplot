@@ -212,6 +212,7 @@ def server(input, output, session):
         strategy = row.get("Strategy", "")
         start_time = row.get("StartTime", "")
         end_time = row.get("EndTime", "")
+        desk = str(order_detail.get("Desk", ""))
 
         try:
             avg_price = float(avg_price_raw)
@@ -221,15 +222,16 @@ def server(input, output, session):
         avg_price_str = f"{avg_price:.3f}" if pd.notna(avg_price) else ""
 
         return ui.div(
-            ui.span(f"{order_id}", class_="me-2 text-muted"),
             ui.span(f"{date}", class_="me-2"),
+            ui.span(f"{order_id}", class_="me-2 text-muted"),
             ui.span(f"{side}", class_="me-2"),
-            ui.span(f"{int(exec_qty):,}{(' @' + avg_price_str) if avg_price_str else ''}", class_="me-2"),
             ui.span(f"{ticker}", class_="me-2"),
             ui.span(f"{country}", class_="me-2"),
+            ui.span(f"{int(exec_qty):,}{(' @' + avg_price_str) if avg_price_str else ''}", class_="me-2"),
             ui.span(f"{strategy}", class_="me-2"),
             ui.span(f"{start_time} - {end_time}", class_="me-2"),
-            ui.span(f"{trader_id}", class_="text-muted"),
+            ui.span(f"{trader_id}", class_="text-muted me-2"),
+            ui.span(f"{desk}", class_="text-muted"),
             class_="fw-semibold",
         )
 

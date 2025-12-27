@@ -61,6 +61,8 @@ def get_orders_table(df: pd.DataFrame) -> Tabulator:
             {"field": "orderid", "title": "OrderID", "width": 90, "hozAlign": "center"},
             {"field": "Date", "title": "Date", "width": 100, "hozAlign": "center"},
             {"field": "Country", "title": "Country", "width": 80, "hozAlign": "center"},
+            {"field": "Desk", "title": "Desk", "width": 80, "hozAlign": "center"},
+            {"field": "Broker", "title": "Broker", "width": 80, "hozAlign": "center"},
             {"field": "Side", "title": "Side", "width": 70, "hozAlign": "center"},
             {"field": "Ticker", "title": "Ticker", "width": 80, "hozAlign": "center"},
             {"field": "OrderQty", "title": "OrderQty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right", "visible": False},
@@ -142,6 +144,7 @@ def get_order_details_table(input, data_service) -> Tabulator:
     default_fields = [
         "OrderID",
         "Broker",
+        "Desk",
         "PctADV",
         "PRate",
     ]
