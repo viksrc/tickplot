@@ -290,9 +290,9 @@ def get_fill_detail_table(input, data_service) -> Tabulator:
         title = f"N {near:.0f}% | M {mid:.0f}% | F {far:.0f}%"
 
         # Use CSS variables for dynamic theme switching
-        # Bid = Near, Ask = Far, Mid = Blue-ish
+        # Bid = Near, Ask = Far, Mid = Lit Volume Color (Blue/Indigo)
         near_color = "var(--color-bid)"
-        mid_color = "var(--color-mid)"
+        mid_color = "var(--color-vol-lit)"
         far_color = "var(--color-ask)"
 
         def seg(width: float, color: str) -> str:
@@ -341,9 +341,9 @@ def get_fill_detail_table(input, data_service) -> Tabulator:
 
         title = f"Lit {lit:.0f}% | Dark {dark:.0f}%"
 
-        # Use same colors as volume bars: Lit=blue (#1864ab / rgba(24,100,171,0.8)), Dark=grey (#495057)
-        lit_color = "rgba(24, 100, 171, 0.8)"  # Same as volume_color
-        dark_color = "#495057"  # Same as dark_vol_color
+        # Use same colors as volume bars: Lit=blue, Dark=grey (Theme aware)
+        lit_color = "var(--color-vol-lit)"
+        dark_color = "var(--color-vol-dark)"
 
         def seg(width: float, color: str) -> str:
             if width <= 0.0:
@@ -436,8 +436,8 @@ def get_venue_table(input, data_service) -> Tabulator:
 
         pct_val = max(0.0, min(100.0, pct_val))
         is_dark = "Dark" in str(venue_type)
-        # Use same colors as volume bars: Lit=blue, Dark=grey
-        bar_color = "#495057" if is_dark else "rgba(24, 100, 171, 0.8)"
+        # Use same colors as volume bars: Lit=blue, Dark=grey (Theme aware)
+        bar_color = "var(--color-vol-dark)" if is_dark else "var(--color-vol-lit)"
 
         label = f"{pct_val:.1f}%"
         title = f"{venue_type}: {label}" if venue_type else label

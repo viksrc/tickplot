@@ -7,7 +7,12 @@ body {
     --color-ask: #e33e19;
     /* Burnt Orange */
     --color-mid: #1d4ed8;
+    --color-mid: #1d4ed8;
     /* True Blue-700 */
+    --color-vol-lit: rgba(24, 100, 171, 0.8);
+    /* Lit Volume (Blue) */
+    --color-vol-dark: #495057;
+    /* Dark Volume (Grey) */
 }
 
 /* Dark mode overrides */
@@ -19,6 +24,10 @@ body {
     /* Bright Red/Orange */
     --color-mid: #60a5fa;
     /* Light Blue */
+    --color-vol-lit: rgba(92, 124, 250, 0.8);
+    /* Lit Volume (Blue-Indigo from Chart) */
+    --color-vol-dark: #7e868e;
+    /* Lighter Grey */
 }
 
 /* Prevent any widget from forcing page-level horizontal scrolling */
