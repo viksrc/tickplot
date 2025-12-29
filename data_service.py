@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import polars as pl
 
 
 def _build_venue_mapping() -> dict[str, dict[str, str]]:
@@ -272,16 +273,19 @@ class DataService:
     like a repository/service so it can later be swapped for DB/API access.
     """
 
-    base_orders: pd.DataFrame
+    base_orders: pl.DataFrame | pd.DataFrame
 
     def __post_init__(self) -> None:
+        if isinstance(self.base_orders, pd.DataFrame):
+            self.base_orders = pl.from_pandas(self.base_orders)
+            
         if "orderid" not in self.base_orders.columns:
             raise ValueError("base_orders must include an 'orderid' column")
-        if self.base_orders["orderid"].duplicated().any():
+        if self.base_orders["orderid"].is_duplicated().any():
             raise ValueError("base_orders.orderid must be unique")
 
         # Simple per-instance caches
-        self._orders_cache: dict[str, pd.DataFrame] = {}
+        self._orders_cache: dict[str, pl.DataFrame] = {}
         self._prices_cache: dict[tuple[str, str], pd.DataFrame] = {}
         self._exec_cache: dict[tuple[str, str], pd.DataFrame] = {}
 
@@ -396,18 +400,17 @@ class DataService:
 
         return cls(base_orders=base_orders)
 
-    def _query_orders_for_date(self, date: str) -> pd.DataFrame:
+    def _query_orders_for_date(self, date: str) -> pl.DataFrame:
         """Internal helper to return all orders for a single date."""
 
         if date in self._orders_cache:
-            return self._orders_cache[date].copy()
+            return self._orders_cache[date]
 
-        df = self.base_orders.copy()
-        df["Date"] = str(date)
+        df = self.base_orders.with_columns(pl.lit(str(date)).alias("Date"))
         
         # Consistent with get_order_enriched logic
         self._orders_cache[date] = df
-        return df.copy()
+        return df
 
     def query_orders(self, start_date: str, end_date: str) -> pd.DataFrame:
         """Return orders for a date range (inclusive), simulating a batch query."""
@@ -425,7 +428,34 @@ class DataService:
         if not dfs:
             return pd.DataFrame()
             
-        return pd.concat(dfs, ignore_index=True)
+        return pl.concat(dfs).to_pandas()
+
+    def query_sql(self, sql_query: str, current_df: pd.DataFrame | None = None) -> pd.DataFrame:
+        """Execute a SQL query against the orders data using Polars SQLContext.
+        
+        Args:
+            sql_query: The SQL query to execute
+            current_df: Optional DataFrame to query against. If provided, the query
+                       runs against this data. If None, falls back to default behavior.
+        """
+        if not sql_query:
+            # Return all orders for a default date range if query is empty (reset)
+            return self.query_orders("2025-01-01", "2025-01-01")
+
+        # Use provided DataFrame if available, otherwise fall back to single date
+        if current_df is not None and not current_df.empty:
+            df = pl.from_pandas(current_df)
+        else:
+            # Fallback for when no current data is provided
+            df = self._query_orders_for_date("2025-01-01")
+        
+        ctx = pl.SQLContext(orders=df)
+        try:
+            result = ctx.execute(sql_query).collect()
+            return result.to_pandas()
+        except Exception as e:
+            print(f"SQL Execution Error: {e}")
+            return pd.DataFrame()
 
     def get_order_enriched(self, date: str, orderid: str) -> dict[str, Any]:
         """Return a dictionary containing the enriched order and its execution data.
@@ -520,11 +550,11 @@ class DataService:
         if key in self._exec_cache:
             return self._exec_cache[key].copy()
 
-        row = self.base_orders.loc[self.base_orders["orderid"] == str(orderid)]
-        if row.empty:
+        row = self.base_orders.filter(pl.col("orderid") == str(orderid))
+        if row.is_empty():
             raise KeyError(f"Unknown orderid: {orderid}")
 
-        rec = row.iloc[0].to_dict()
+        rec = row.to_dicts()[0]
         exch_open = str(rec["ExchOpenTime"])
         exch_close = str(rec["ExchCloseTime"])
         _, exec_df = _generate_stock_and_execution_data(
@@ -618,11 +648,11 @@ class DataService:
     def get_order(self, date: str, orderid: str) -> dict[str, Any]:
         """Return the base order fields plus a stable demo TraderID."""
 
-        row = self.base_orders.loc[self.base_orders["orderid"] == str(orderid)]
-        if row.empty:
+        row = self.base_orders.filter(pl.col("orderid") == str(orderid))
+        if row.is_empty():
             raise KeyError(f"Unknown orderid: {orderid}")
 
-        rec: dict[str, Any] = row.iloc[0].to_dict()
+        rec = row.to_dicts()[0]
         rec["Date"] = str(date)
         rec["TraderID"] = self._trader_id_for_order(str(orderid))
         return rec

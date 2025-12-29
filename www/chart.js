@@ -260,3 +260,53 @@ resizeAllPlotly();
         setupSearchDebounce();
     }
 })();
+
+// Auto-select first row in orders_table when data loads or table re-renders
+(function () {
+    let lastTableInstance = null;
+
+    function doAutoSelect(table) {
+        if (!table) return;
+
+        // Get active rows (visible after filters/sorts)
+        const rows = table.getRows("active");
+        if (rows && rows.length > 0) {
+            // Select the first row
+            rows[0].select();
+
+            // Sync with Shiny so the chart and details update
+            if (window.Shiny && window.Shiny.setInputValue) {
+                setTimeout(() => {
+                    const rowData = rows[0].getData();
+                    window.Shiny.setInputValue('orders_table_row_clicked', rowData);
+                }, 50);
+            }
+        }
+    }
+
+    function checkAndHook() {
+        if (typeof Tabulator === 'undefined') return;
+
+        // Correct way to find the instance in pytabulator
+        const tables = Tabulator.findTable('#orders_table');
+        if (!tables || tables.length === 0) return;
+
+        const currentTable = tables[0];
+
+        // Detect if Shiny replaced the table instance
+        if (currentTable !== lastTableInstance) {
+            lastTableInstance = currentTable;
+
+            // Hook for future data updates (SQL filters, etc)
+            currentTable.on("dataLoaded", function () {
+                doAutoSelect(currentTable);
+            });
+
+            // Initial selection
+            doAutoSelect(currentTable);
+        }
+    }
+
+    // Poll to catch re-renders
+    setInterval(checkAndHook, 300);
+})();

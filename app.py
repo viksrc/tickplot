@@ -18,12 +18,26 @@ from shinywidgets import output_widget, render_widget
 from data_service import DataService
 from plotly_order_viz import create_order_viz
 import tables
+from nl_service import NLService
+import dotenv
+import os
+
+dotenv.load_dotenv()
 
 # Data access layer (Option B)
 DATA_SERVICE = DataService.demo()
 
+# Chat greeting message with clickable suggestions
+CHAT_GREETING = """
+You can use this sidebar to filter and sort orders based on the columns available in the `orders` table. Here are some examples:
 
+1. Filtering: <span class="suggestion">Show only Buy orders for SPY.</span>
+2. Sorting: <span class="suggestion">Sort by ExecQty descending.</span>
+3. Performance: <span class="suggestion">Show orders with PerfArrival less than 10.</span>
+4. Questions: <span class="suggestion">What is the total ExecQty by Strategy?</span>
 
+You can also say <span class="suggestion">Reset</span> to clear filters, or <span class="suggestion">Help</span> for more tips.
+"""
 
 app_ui = ui.page_navbar(
     ui.nav_panel(
@@ -31,12 +45,14 @@ app_ui = ui.page_navbar(
         ui.layout_sidebar(
             ui.sidebar(
                 ui.input_date("start_date", "Start Date", value="2025-01-01"),
-                ui.input_date("end_date", "End Date", value="2025-01-01"),
-                ui.input_action_button("query_btn", "Query", class_="btn-primary"),
-                width=250,
+                ui.input_date("end_date", "End Date", value="2025-01-15"),
+                ui.input_action_button("query_btn", "Query", class_="btn-primary w-100"),
+                ui.hr(),
+                ui.chat_ui("chat", height="400px", messages=[CHAT_GREETING]),
+                width=400,
             ),
             ui.card(
-                ui.card_header("Order Table"),
+                ui.card_header(ui.output_text("table_header")),
                 ui.input_text(
                     "search_orders",
                     None,
@@ -113,21 +129,74 @@ def server(input, output, session):
     # Store the user's zoom range when switching bins (non-reactive for tracking)
     _last_bin_size = {"value": "5min"}
     
-    # Reactive value to hold the orders data
-    orders_df = reactive.Value(pd.DataFrame())
+    # Reactive values: base data from date query, and SQL filter to apply
+    base_orders_df = reactive.Value(pd.DataFrame())
+    current_title = reactive.Value("Order Table")
+    current_sql = reactive.Value("")
+    
+    # Computed filtered data - applies SQL to base data (like sidebot pattern)
+    @reactive.calc
+    def orders_df():
+        base_df = base_orders_df()
+        sql_query = current_sql()
+        
+        if base_df.empty:
+            return pd.DataFrame()
+        
+        if not sql_query:
+            # No filter, return all base data
+            return base_df
+        
+        # Apply SQL filter to base data
+        return DATA_SERVICE.query_sql(sql_query, base_df)
+    
+    # Initialize NL Service
+    nl_service = NLService(DATA_SERVICE.base_orders)
+    
+    chat = ui.Chat("chat")
+
+    @chat.on_user_submit
+    async def perform_chat(user_input: str):
+        if not user_input:
+            return
+            
+        await nl_service.perform_chat(user_input, chat)
+
+    async def update_filter(query: str, title: str):
+        """Update the SQL filter - called from tool with reactive lock."""
+        async with reactive.lock():
+            current_sql.set(query)
+            current_title.set(title or "Order Table")
+            await reactive.flush()
+
+    async def update_dashboard(query: str, title: str):
+        """Tool callback: just updates the filter, doesn't read reactive values."""
+        # Validate query by attempting to execute it (like sidebot does)
+        if query:
+            await query_db(query)
+        await update_filter(query, title)
+
+    async def query_db(query: str):
+        """Tool callback: executes SQL against base data.
+        
+        Note: We can't read reactive values here, so we execute against
+        the full base orders from DATA_SERVICE. The query_sql method
+        will use its internal cache or default data.
+        """
+        # Execute against the base orders from the service
+        # This is safe because DATA_SERVICE.base_orders is not reactive
+        return DATA_SERVICE.query_sql(query).to_json(orient="records")
+
+    nl_service.register_tools(update_dashboard, query_db)
+
+    @render.text
+    def table_header():
+        return current_title()
 
     @reactive.Effect
     def _fetch_data():
-        # Fetch data on button click, but also run once on startup (by reacting to the inputs initially if we want?)
-        # Or we can just explicitly init orders_df.
-        # But user pattern is usually: inputs -> button -> update.
-        # To show data on load, we can check a flag or just run it.
-        # However, input.query_btn() is 0 initially.
-        
-        # We can use reactive.isolate to read inputs without dependency?
-        # But we want to trigger on button.
-        # Let's check `input.query_btn()`
-        _ = input.query_btn() # Dependency
+        # Fetch data on button click
+        _ = input.query_btn()  # Dependency
         
         # Isolate inputs to avoid updating on date change without button press
         with reactive.isolate():
@@ -141,8 +210,11 @@ def server(input, output, session):
         start_str = str(start)
         end_str = str(end)
         
+        # Load base data and reset any SQL filter
         df = DATA_SERVICE.query_orders(start_str, end_str)
-        orders_df.set(df)
+        base_orders_df.set(df)
+        current_sql.set("")
+        current_title.set("Order Table")
         
     @reactive.calc
     def volume_bin_size():
@@ -279,7 +351,7 @@ def server(input, output, session):
 
     @render_tabulator
     def orders_table():
-        df = orders_df.get()
+        df = orders_df()
         total_count = len(df)
         
         # We no longer compute Notional here as it requires AvgPrice which is expensive
@@ -304,7 +376,9 @@ def server(input, output, session):
             
             def row_matches(row):
                 # Build text from text columns (substring match)
+                # Strip - and . for date-friendly matching
                 text_values = " ".join(str(row[c]).lower() for c in text_cols)
+                text_values_normalized = text_values.replace("-", "").replace(".", "")
                 
                 # Build numeric strings without commas for prefix match
                 numeric_strs = [str(int(row[c])).lower() if pd.notna(row[c]) else "" 
@@ -312,10 +386,11 @@ def server(input, output, session):
                 
                 # Each token must match somewhere
                 for token in tokens:
-                    token_clean = token.replace(",", "")  # User might type with commas
+                    # Clean token: remove commas, dashes, dots for flexible matching
+                    token_clean = token.replace(",", "").replace("-", "").replace(".", "")
                     
-                    # Check text columns (substring match)
-                    if token_clean in text_values:
+                    # Check text columns (substring match) - try both normalized and original
+                    if token_clean in text_values_normalized or token_clean in text_values:
                         continue
                     
                     # Check numeric columns (prefix match - startswith)
