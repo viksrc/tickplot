@@ -14,11 +14,15 @@ from pytabulator import (
 )
 from shiny import App, render, ui, reactive
 from shinywidgets import output_widget, render_widget
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Mount, Route
 
 from data_service import DataService
 from plotly_order_viz import create_order_viz
 import tables
 from nl_service import NLService
+from databot_service import DatabotService
 import dotenv
 import os
 
@@ -26,6 +30,13 @@ dotenv.load_dotenv()
 
 # Data access layer (Option B)
 DATA_SERVICE = DataService.demo()
+
+# Global storage for session-specific data
+# Map: session_id -> DataFrame
+SESSION_STORE = {}
+
+# Keep LATEST_DF as a simplified fallback for single-user dev
+LATEST_DF = None
 
 # Chat greeting message with clickable suggestions
 CHAT_GREETING = """
@@ -110,10 +121,26 @@ app_ui = ui.page_navbar(
             col_widths=[2, 10],
         ),
     ),
+    ui.nav_panel(
+        "Databot",
+        ui.layout_sidebar(
+            ui.sidebar(
+                ui.chat_ui("databot_chat", height="600px"),
+                width=400,
+                title="Databot Chat"
+            ),
+            ui.card(
+                ui.card_header("Analysis Result"),
+                ui.output_ui("databot_display"),
+                class_="h-100"
+            ),
+        ),
+    ),
     title="Order Visualizer",
     header=ui.TagList(
         ui.include_css("www/styles.css"),
         ui.include_js("www/chart.js"),
+        ui.tags.script(src="https://cdn.plot.ly/plotly-2.27.0.min.js"),
         ui.output_ui("theme_tabulator_css"),
         ui.div(
             ui.input_dark_mode(id="dark_mode", mode="light"),
@@ -126,6 +153,9 @@ app_ui = ui.page_navbar(
 
 
 def server(input, output, session):
+    # Print session ID for manual API testing
+    print(f"\n--- User connected. Session ID: {session.id} ---\n")
+    
     # Store the user's zoom range when switching bins (non-reactive for tracking)
     _last_bin_size = {"value": "5min"}
     
@@ -133,6 +163,18 @@ def server(input, output, session):
     base_orders_df = reactive.Value(pd.DataFrame())
     current_title = reactive.Value("Order Table")
     current_sql = reactive.Value("")
+    
+    @reactive.Effect
+    def _sync_global_df():
+        global LATEST_DF
+        df = base_orders_df.get()
+        if not df.empty:
+             LATEST_DF = df
+             # Sync to session-specific store
+             SESSION_STORE[session.id] = df
+             
+    # Cleanup on session end
+    session.on_ended(lambda: SESSION_STORE.pop(session.id, None))
     
     # Computed filtered data - applies SQL to base data (like sidebot pattern)
     @reactive.calc
@@ -457,6 +499,7 @@ def server(input, output, session):
         data = current_order_enriched()
         return tables.get_venue_table(input, data, DATA_SERVICE)
 
+
     @render_widget
     def order_chart():
         is_dark = input.dark_mode() == "dark"
@@ -565,5 +608,66 @@ def server(input, output, session):
         )
 
 
+    # --- Databot Logic ---
+    
+    # Reactive value to hold the generated plot
+    databot_fig = reactive.Value(None)
+    
+    # Initialize Databot Service with session ID
+    databot_service = DatabotService(DATA_SERVICE, session_id=session.id)
+    
+    # Callback to update the plot from the tool
+    async def update_databot_plot(fig):
+        async with reactive.lock():
+            databot_fig.set(fig)
+            await reactive.flush()
+        
+    databot_service.register_plot_callback(update_databot_plot)
+    
+    @reactive.Effect
+    async def _register_databot_tools():
+        await databot_service.register_tools()
+    
+    databot_chat = ui.Chat("databot_chat")
+    
+    @databot_chat.on_user_submit
+    async def perform_databot_chat(user_input: str):
+        if not user_input:
+            return
+        await databot_service.perform_chat(user_input, databot_chat)
 
-app = App(app_ui, server)
+    @render.ui
+    def databot_display():
+        val = databot_fig()
+        if isinstance(val, str):
+            return ui.HTML(val)
+        return val  # Should be a widget or None
+
+
+
+app_shiny = App(app_ui, server)
+
+
+async def orders_api(request):
+    """API endpoint to get orders data as JSON."""
+    session_id = request.query_params.get("session_id")
+    
+    # 1. Try session-specific data
+    if session_id and session_id in SESSION_STORE:
+        df = SESSION_STORE[session_id]
+        return Response(df.to_json(orient="records", date_format="iso"), media_type="application/json")
+
+    # 2. Fallback to latest global (single-user dev mode)
+    if LATEST_DF is not None and not LATEST_DF.empty:
+         return Response(LATEST_DF.to_json(orient="records", date_format="iso"), media_type="application/json")
+         
+    # 3. Fallback to base templates
+    json_str = DATA_SERVICE.base_orders.write_json()
+    return Response(content=json_str, media_type="application/json")
+
+routes = [
+    Route('/orders', orders_api),
+    Mount('/', app=app_shiny),
+]
+
+app = Starlette(routes=routes)

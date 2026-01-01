@@ -9,3 +9,5 @@ faicons
 python-dotenv
 chatlas
 openai
+mcp
+mcp-run-python

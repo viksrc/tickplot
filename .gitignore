@@ -1,2 +1,7 @@
 __pycache__/
 *.pyc
+*.log
+.venv/
+.env
+last_tool_result.txt
+node_modules/
