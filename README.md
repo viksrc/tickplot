@@ -21,11 +21,17 @@ Plotly chart for high-level insight into the Titanic dataset.
 	```bash
 	pip install -r requirements.txt
 	```
-3. Launch the Shiny app (the `app` object lives inside `app.py`):
+3. **(Optional)** If using the Databot feature, install and patch `mcp-run-python`:
+	```bash
+	pip install mcp-run-python
+	./apply-mcp-patch.sh
+	```
+	> **Note:** The patch reverts `mcp-run-python` to use `minimist` instead of Deno's standard library for compatibility. Re-run the patch script after any package reinstall.
+4. Launch the Shiny app (the `app` object lives inside `app.py`):
 	```bash
 	shiny run --reload --port 8000 app:app
 	```
-4. Open the reported URL in a browser to interact with the Tabulator grid and Plotly chart.
+5. Open the reported URL in a browser to interact with the Tabulator grid and Plotly chart.
 
 ## Project Layout
 

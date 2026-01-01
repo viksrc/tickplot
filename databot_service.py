@@ -62,7 +62,6 @@ class DatabotService:
     async def register_tools(self):
         # Register local display tools (kept for manual use if needed)
         self.session.register_tool(self.display_plot)
-        self.session.register_tool(self.display_html)
         
         # Register the Pydantic mcp-run-python server via Deno
         await self.session.register_mcp_tools_stdio_async(
