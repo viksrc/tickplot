@@ -140,7 +140,7 @@ app_ui = ui.page_navbar(
     header=ui.TagList(
         ui.include_css("www/styles.css"),
         ui.include_js("www/chart.js"),
-        ui.tags.script(src="https://cdn.plot.ly/plotly-2.27.0.min.js"),
+        ui.tags.script(src="https://cdn.plot.ly/plotly-3.3.0.min.js"),
         ui.output_ui("theme_tabulator_css"),
         ui.div(
             ui.input_dark_mode(id="dark_mode", mode="light"),

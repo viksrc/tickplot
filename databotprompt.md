@@ -32,6 +32,21 @@ Don't run any code or tools in this first interaction--let the user make the fir
   - ❌ `pd.read_json(url)` - does NOT work
   - ❌ `open_url` / `pyxhr` - do NOT work in Deno
 
+## Data Schema
+
+The orders data available at `http://127.0.0.1:8000/orders` has the following structure:
+
+${SCHEMA}
+
+## Domain Knowledge
+
+**Performance columns** (`PerfArrival`, `PerfVWAP`, `PerfClose`) represent execution cost in basis points:
+- **Lower values are BETTER** (lower cost)
+- **Higher values are WORSE** (higher cost)
+- Negative values indicate the trade outperformed the benchmark
+- When users ask for "best" or "good" performance, filter for LOWER values
+- When users ask for "worst" or "bad" performance, filter for HIGHER values
+
 * **Complete Script Example** (fetching + analysis + visualization in ONE script):
 
 ```python
@@ -47,7 +62,13 @@ df = pd.DataFrame(data)
 print(f"Loaded {len(df)} rows")
 
 # 2. PROCESS/ANALYZE DATA
+# Option A: Using groupby (recommended)
 summary = df.groupby('Country').size().reset_index(name='Count')
+
+# Option B: Using value_counts (pandas 2.0+ creates 'count' column)
+# summary = df['Country'].value_counts().reset_index()
+# This creates columns: 'Country' and 'count'
+
 print(summary)
 
 # 3. VISUALIZE (if requested)
@@ -57,6 +78,8 @@ fig = px.bar(summary, x='Country', y='Count', title='Orders by Country')
 html_output = fig.to_html(full_html=False, include_plotlyjs='cdn')
 print(html_output)
 ```
+
+**Important pandas note**: `value_counts().reset_index()` creates columns named after the original column + `'count'`, NOT `'index'`. Use the actual column names in plotly calls.
 
 **Visualization is automatic**: When your script prints Plotly HTML, it will automatically be displayed in the "Analysis Result" panel - no additional tool call needed.
 
