@@ -6,12 +6,114 @@ It returns raw DataFrames / primitives that the Shiny layer formats.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import polars as pl
+
+
+class DataServiceBase(ABC):
+    """Abstract base class defining the DataService interface.
+    
+    Subclasses must implement the abstract methods to provide data access.
+    This base class provides generic analytics methods that work with any implementation.
+    """
+    
+    @abstractmethod
+    def get_executions(self, date: str, orderid: str) -> pd.DataFrame:
+        """Return executions for a date+orderid."""
+        pass
+    
+    @abstractmethod
+    def get_volume_data(
+        self, date: str, ticker: str,
+        exch_open_time: str, exch_close_time: str,
+        interval: str = "1min"
+    ) -> pd.DataFrame:
+        """Return aggregated volume data for a date+ticker at the specified interval."""
+        pass
+    
+    def get_binned_analytics(
+        self,
+        date: str,
+        orderid: str,
+        ticker: str,
+        exch_open_time: str,
+        exch_close_time: str,
+        interval: str = "1min",
+    ) -> pd.DataFrame:
+        """Bin executions and calculate PRate (Participation Rate) per bin.
+        
+        Returns a DataFrame with columns:
+        - Time: bin start time
+        - ExecQty: total executed quantity in this bin
+        - Volume: market volume in this bin
+        - PRate: participation rate (ExecQty / Volume), capped at 100%
+        
+        This method works with any DataService implementation by using
+        the abstract get_executions() and get_volume_data() methods.
+        """
+        # Get raw executions
+        exec_df = self.get_executions(date, orderid)
+        
+        # Get volume data at the specified interval
+        volume_df = self.get_volume_data(date, ticker, exch_open_time, exch_close_time, interval)
+        
+        if exec_df.empty:
+            # No executions - return volume bins with zero ExecQty and PRate
+            result = volume_df[["Time", "Volume"]].copy()
+            result["ExecQty"] = 0
+            result["PRate"] = 0.0
+            return result
+        
+        # Bin executions to match volume intervals
+        exec_df = exec_df.copy()
+        exec_df["Time"] = pd.to_datetime(exec_df["Time"])
+        
+        # Determine resample rule from interval string
+        resample_rule = interval
+        if interval == "30s":
+            resample_rule = "30s"
+        elif interval == "1min":
+            resample_rule = "1min"
+        elif interval == "2min":
+            resample_rule = "2min"
+        elif interval == "5min":
+            resample_rule = "5min"
+        
+        # Aggregate execution sizes per bin
+        binned_exec = (
+            exec_df.set_index("Time")[["Size"]]
+            .resample(resample_rule)
+            .sum()
+            .reset_index()
+            .rename(columns={"Size": "ExecQty"})
+        )
+        
+        # Filter out auction rows (Open/Close) from volume for merging
+        regular_volume = volume_df[volume_df.get("Kind", "Regular") == "Regular"].copy()
+        
+        # Merge with volume data
+        merged = pd.merge(
+            regular_volume[["Time", "Volume"]],
+            binned_exec,
+            on="Time",
+            how="left"
+        )
+        merged["ExecQty"] = merged["ExecQty"].fillna(0).astype(int)
+        
+        # Calculate PRate (capped at 100%)
+        # If volume is 0, PRate is 100% if there are executions, else 0%
+        merged["PRate"] = np.where(
+            merged["Volume"] > 0,
+            (merged["ExecQty"] / merged["Volume"] * 100).clip(upper=100),
+            np.where(merged["ExecQty"] > 0, 100.0, 0.0)
+        )
+        
+        return merged
 
 
 def _build_venue_mapping() -> dict[str, dict[str, str]]:
@@ -266,7 +368,7 @@ def _generate_stock_and_execution_data(
 
 
 @dataclass
-class DataService:
+class DataService(DataServiceBase):
     """Data access layer.
 
     Right now this is backed by a deterministic simulation, but it is structured
@@ -454,7 +556,9 @@ class DataService:
             result = ctx.execute(sql_query).collect()
             return result.to_pandas()
         except Exception as e:
-            print(f"SQL Execution Error: {e}")
+            # Log SQL errors at warning level (don't print to console)
+            import logging
+            logging.warning(f"SQL Execution Error: {e}")
             return pd.DataFrame()
 
     def get_order_enriched(self, date: str, orderid: str) -> dict[str, Any]:

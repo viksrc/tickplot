@@ -138,7 +138,11 @@ app_ui = ui.page_navbar(
     ),
     title="Order Visualizer",
     header=ui.TagList(
-        ui.include_css("www/styles.css"),
+        ui.include_css("www/styles.css"), # shiny include_css reads file content and inlines it, so ?v=2 doesn't work here. 
+        # Wait, ui.include_css INLINES the css. It doesn't link it.
+        # So browser cache for the file doesn't matter, only the app reload matters.
+        # The CSS is refreshed if the app reloads.
+        
         ui.include_js("www/chart.js"),
         ui.tags.script(src="https://cdn.plot.ly/plotly-3.3.0.min.js"),
         ui.output_ui("theme_tabulator_css"),
@@ -548,37 +552,49 @@ def server(input, output, session):
         exch_open_mins = int(eo_parts[0]) * 60 + int(eo_parts[1])
         exch_close_mins = int(ec_parts[0]) * 60 + int(ec_parts[1])
 
-        # Add extra left padding so the Open auction bar isn't clipped.
-        if bin_size == "5min":
-            min_left_mins = exch_open_mins - 10
-        elif bin_size == "1min":
-            min_left_mins = exch_open_mins - 5
-        else:  # 30s
-            min_left_mins = exch_open_mins - 1
-
-        view_start_mins = max(min_left_mins, st_minutes - padding_mins)
+        # Convert bin_size to seconds for precision
+        bin_seconds = {"5min": 300, "2min": 120, "1min": 60, "30s": 30}.get(bin_size, 300)
         
-        # Dynamic upper bound: Exch Close + 5 mins
-        max_view_mins = exch_close_mins + 5
-        calculated_end = et_minutes + padding_mins
+        # Open auction bar range: exch_open - bin_size to exch_open
+        exch_open_secs = exch_open_mins * 60
+        min_left_secs = exch_open_secs - bin_seconds
         
-        # Ensure we don't clip tightly if close to market close, unless strictly closed
-        # trusting calculated padding over ExchClose to avoid cutting off chart
-        view_end_mins = calculated_end
+        calculated_start_secs = (st_minutes - padding_mins) * 60
+        view_start_secs = max(min_left_secs, calculated_start_secs)
+        
+        # Dynamic upper bound: Exch Close + bin_size
+        exch_close_secs = exch_close_mins * 60
+        max_view_secs = exch_close_secs + bin_seconds
+        calculated_end_secs = (et_minutes + padding_mins) * 60
+        
+        # Cap the view end at exchange close + bin_size to avoid extending too far
+        view_end_secs = min(calculated_end_secs, max_view_secs)
 
-        view_start_h, view_start_m = divmod(view_start_mins, 60)
-        view_end_h, view_end_m = divmod(view_end_mins, 60)
+        view_start_h, view_start_rem = divmod(view_start_secs, 3600)
+        view_start_m, view_start_s = divmod(view_start_rem, 60)
+        
+        view_end_h, view_end_rem = divmod(view_end_secs, 3600)
+        view_end_m, view_end_s = divmod(view_end_rem, 60)
+        
         default_x_range = [
-            f"{date}T{view_start_h:02d}:{view_start_m:02d}:00",
-            f"{date}T{view_end_h:02d}:{view_end_m:02d}:00",
+            f"{date}T{view_start_h:02d}:{view_start_m:02d}:{view_start_s:02d}",
+            f"{date}T{view_end_h:02d}:{view_end_m:02d}:{view_end_s:02d}",
         ]
 
-        # Always use current slider position if available, only use default on initial load
+        # Only use saved slider position if it's for the SAME order (date:orderid)
+        # Otherwise, reset to default view for newly selected order
+        current_order_key = f"{date}:{orderid}"
         x_range = default_x_range
         if "chart_x_range" in input:
-            saved_range = input.chart_x_range()
-            if saved_range and len(saved_range) == 2:
-                x_range = saved_range
+            saved_data = input.chart_x_range()
+            if saved_data and isinstance(saved_data, dict):
+                saved_range = saved_data.get("range")
+                saved_key = saved_data.get("orderKey")
+                if saved_range and len(saved_range) == 2 and saved_key == current_order_key:
+                    x_range = saved_range
+            elif saved_data and isinstance(saved_data, list) and len(saved_data) == 2:
+                # Legacy format (just the range) - don't use it for new orders
+                pass
         
         # Track bin size for any future logic that needs it
         current_bin = bin_size
@@ -603,6 +619,7 @@ def server(input, output, session):
             is_dark=bool(is_dark),
             theme_colors=theme_colors,
             x_range=[str(x_range[0]), str(x_range[1])],
+            default_x_range=[str(default_x_range[0]), str(default_x_range[1])],
             exch_open_time=exch_open_time,
             exch_close_time=exch_close_time,
         )

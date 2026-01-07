@@ -26,6 +26,7 @@ def create_order_viz(
 	is_dark: bool,
 	theme_colors: dict[str, str],
 	x_range: list[str],
+	default_x_range: list[str],
 	exch_open_time: str,
 	exch_close_time: str,
 ) -> go.Figure:
@@ -38,7 +39,8 @@ def create_order_viz(
 	- bin_size: one of "5min" | "2min" | "1min" | "30s"
 	- is_dark: whether UI is in dark mode
 	- theme_colors: mapping with keys: primary, secondary, body_color, warning, danger
-	- x_range: [start_iso, end_iso] strings for the initial view
+	- x_range: [start_iso, end_iso] strings for the current view (may be user-modified)
+	- default_x_range: [start_iso, end_iso] strings for the default/All view
 	- exch_open_time, exch_close_time: exchange trading hours (HH:MM)
 	"""
 
@@ -94,12 +96,18 @@ def create_order_viz(
 
 	# 3 rows: Stock price (row 1), Volume (row 2), Hidden price for rangeslider (row 3)
 	# Row 3 has zero height but its rangeslider shows bid/ask price series
+	# Row 2 has secondary_y enabled for PRate overlay
 	fig = make_subplots(
 		rows=3,
 		cols=1,
 		shared_xaxes=False,
 		vertical_spacing=0.0,
 		row_heights=[0.55, 0.25, 0.001],  # Row 3 is invisible (just for rangeslider)
+		specs=[
+			[{"secondary_y": False}],  # Row 1: Price chart
+			[{"secondary_y": True}],   # Row 2: Volume chart with secondary y for PRate
+			[{"secondary_y": False}],  # Row 3: Hidden rangeslider
+		],
 	)
 
 	fig.update_layout(barmode="stack")
@@ -196,6 +204,16 @@ def create_order_viz(
 		)
 
 	volume_df = data_service.get_volume_data(date, ticker, exch_open_time, exch_close_time, interval=bin_size)
+	
+	# Get binned analytics (PRate) for the order
+	binned_analytics = data_service.get_binned_analytics(
+		date=date,
+		orderid=orderid,
+		ticker=ticker,
+		exch_open_time=exch_open_time,
+		exch_close_time=exch_close_time,
+		interval=bin_size,
+	)
 
 	if "Kind" in volume_df.columns:
 		regular_vol = volume_df.loc[volume_df["Kind"] == "Regular"].copy()
@@ -338,6 +356,29 @@ def create_order_viz(
 				col=1,
 			)
 
+	# Trace: PRate line on secondary y-axis for Volume chart (row 2)
+	if not binned_analytics.empty and "PRate" in binned_analytics.columns:
+		prate_time_values = binned_analytics["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
+		prate_values = binned_analytics["PRate"].tolist()
+		
+		# Choose a distinct color for PRate line
+		prate_color = "#f59e0b" if is_dark else "#d97706"  # Amber/orange
+		
+		fig.add_trace(
+			go.Scatter(
+				x=prate_time_values,
+				y=prate_values,
+				name="PRate",
+				mode="lines",
+				line=dict(color=prate_color, width=2),
+				hovertemplate="<b>PRate</b>: %{y:.1f}%<extra></extra>",
+				showlegend=False,
+			),
+			row=2,
+			col=1,
+			secondary_y=True,  # Use secondary y-axis
+		)
+
 	# Row 3: Hidden price traces for the rangeslider (shows bid/ask in the slider)
 	# These traces render in the rangeslider - the main plot area is near-zero height
 	fig.add_trace(
@@ -440,7 +481,7 @@ def create_order_viz(
 			bordercolor=grid_color,
 			borderwidth=1,
 		),
-		margin=dict(l=60, r=20, t=50, b=120),
+		margin=dict(l=60, r=40, t=50, b=50),
 		paper_bgcolor="rgba(0,0,0,0)",
 		plot_bgcolor="rgba(0,0,0,0)",
 		font_color=font_color,
@@ -452,7 +493,6 @@ def create_order_viz(
 		),
 		height=600,
 		xaxis2=dict(
-			overlaying="x",
 			matches="x",
 			type="date",
 			showticklabels=False,
@@ -460,25 +500,33 @@ def create_order_viz(
 			zeroline=False,
 			hoverformat="%H:%M:%S",
 		),
+		# Store order key in layout metadata so JS can track which order the chart is for
+		meta=dict(orderKey=f"{date}:{orderid}"),
 	)
 
-	fig.update_xaxes(unifiedhovertitle=dict(text=""), row=1, col=1)
+	# Removed unifiedhovertitle clearing to restore time display in price chart hover
+	# fig.update_xaxes(unifiedhovertitle=dict(text=""), row=1, col=1)
 
 	# Calculate rangeslider bounds based on exchange hours
 	exch_open_mins = int(exch_open_time.split(":")[0]) * 60 + int(exch_open_time.split(":")[1])
 	exch_close_mins = int(exch_close_time.split(":")[0]) * 60 + int(exch_close_time.split(":")[1])
 	
-	if bin_size == "5min":
-		min_left_mins = exch_open_mins - 10  # 10 min before open
-	elif bin_size == "2min":
-		min_left_mins = exch_open_mins - 8
-	elif bin_size == "1min":
-		min_left_mins = exch_open_mins - 5
-	else:
-		min_left_mins = exch_open_mins - 1
+	bin_seconds = {"5min": 300, "2min": 120, "1min": 60, "30s": 30}.get(bin_size, 300)
 
-	# Default slider end is Exch Close + 5 mins
-	slider_end_iso = f"{date}T{exch_close_mins // 60:02d}:{(exch_close_mins % 60) + 5:02d}:00"
+	# Slider start: Exch Open - bin_size
+	exch_open_secs = exch_open_mins * 60
+	slider_start_secs = exch_open_secs - bin_seconds
+	slider_start_h, slider_start_rem = divmod(slider_start_secs, 3600)
+	slider_start_m, slider_start_s = divmod(slider_start_rem, 60)
+	slider_start_iso = f"{date}T{slider_start_h:02d}:{slider_start_m:02d}:{slider_start_s:02d}"
+	min_left_mins = slider_start_secs // 60  # For time label calculations below
+
+	# Default slider end is Exch Close + bin_size
+	exch_close_secs = exch_close_mins * 60
+	slider_end_secs = exch_close_secs + bin_seconds
+	slider_end_h, slider_end_rem = divmod(slider_end_secs, 3600)
+	slider_end_m, slider_end_s = divmod(slider_end_rem, 60)
+	slider_end_iso = f"{date}T{slider_end_h:02d}:{slider_end_m:02d}:{slider_end_s:02d}"
 	
 	# If the initial view (x_range[1]) extends beyond the default slider end (due to padding),
 	# extend the slider to match.
@@ -486,7 +534,7 @@ def create_order_viz(
 		slider_end_iso = x_range[1]
 
 	x_range_slider = [
-		f"{date}T{min_left_mins // 60:02d}:{min_left_mins % 60:02d}:00",
+		slider_start_iso,
 		slider_end_iso,
 	]
 
@@ -669,6 +717,16 @@ def create_order_viz(
 		col=1,
 		title_text="Volume",
 		domain=[0.15, 0.38],  # Row 2: right below Row 1, slider pushed lower
+		secondary_y=False,  # Primary y-axis for Volume bars
+	)
+	# Secondary y-axis for PRate line overlay
+	fig.update_yaxes(
+		row=2,
+		col=1,
+		title_text="PRate%",
+		ticksuffix="%",
+		showgrid=False,  # Don't show grid for secondary axis
+		secondary_y=True,  # Secondary y-axis for PRate
 	)
 	fig.update_yaxes(
 		row=3,

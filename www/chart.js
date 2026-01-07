@@ -34,6 +34,12 @@ function resizeAllPlotly() {
 
         graphDiv._hasRescaling = true;
 
+        // Read order key from Plotly layout metadata and store on graphDiv
+        // This is used to track which order the saved range belongs to
+        if (graphDiv.layout && graphDiv.layout.meta && graphDiv.layout.meta.orderKey) {
+            graphDiv._currentOrderKey = graphDiv.layout.meta.orderKey;
+        }
+
         // Ensure Plotly fits the container on first bind
         setTimeout(() => _safePlotlyResize(graphDiv), 50);
 
@@ -113,16 +119,29 @@ function resizeAllPlotly() {
                     if (layoutRange && layoutRange.length === 2) {
                         const initMins = (_toEpochMs(layoutRange[1]) - _toEpochMs(layoutRange[0])) / 60000;
                         graphDiv._lastBinSize = initMins > 160 ? '5min' : (initMins > 80 ? '2min' : (initMins >= 40 ? '1min' : '30s'));
+                        graphDiv._lastRangeMins = initMins;
                     } else {
                         graphDiv._lastBinSize = '5min';
+                        graphDiv._lastRangeMins = 999;
                     }
                 }
 
                 const prevBinSize = graphDiv._lastBinSize;
-                if (newBinSize !== prevBinSize) {
+                const prevRangeMins = graphDiv._lastRangeMins || 999;
+
+                // Trigger re-render if bin size changed OR if range changed significantly (>10%)
+                const rangeChangedSignificantly = Math.abs(rangeMins - prevRangeMins) / prevRangeMins > 0.1;
+
+                if (newBinSize !== prevBinSize || rangeChangedSignificantly) {
                     graphDiv._lastBinSize = newBinSize;
+                    graphDiv._lastRangeMins = rangeMins;
                     Shiny.setInputValue('chart_range_mins', rangeMins);
-                    Shiny.setInputValue('chart_x_range', [xStart, xEnd]);
+                    // Store range with order key so Python can verify it's for the current order
+                    const orderKey = graphDiv._currentOrderKey || null;
+                    Shiny.setInputValue('chart_x_range', {
+                        range: [xStart, xEnd],
+                        orderKey: orderKey
+                    });
                 }
             }
 

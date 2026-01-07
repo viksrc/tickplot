@@ -226,3 +226,5 @@ html:not([data-bs-theme="dark"]) .tabulator .tabulator-row .tabulator-cell:last-
 [data-bs-theme="dark"] .tabulator-cell div {
     color: #c9d1d9 !important;
 }
+
+/* Force reload 123 */
