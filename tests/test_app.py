@@ -479,8 +479,9 @@ def test_stock_chart_existence(page: Page, app: ShinyAppProc):
     verify(actual_end == expected_end, f"End marker time {actual_end} matches order end {expected_end}")
 
 @pytest.mark.anyio
-def test_volume_chart_features(page: Page, app: ShinyAppProc):
-    LOGGER.info("Starting test_volume_chart_features")
+def test_volume_chart_open_label(page: Page, app: ShinyAppProc):
+    """Test specifically for the Open bar hover label."""
+    LOGGER.info("Starting test_volume_chart_open_label")
     page.goto(app.url)
     page.locator("#query_btn").click()
     
@@ -492,21 +493,72 @@ def test_volume_chart_features(page: Page, app: ShinyAppProc):
     page.get_by_text("Chart", exact=True).click()
     expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
     
-    volume_bars = page.locator(".trace.bars .point")
+    # Target the Lit Volume trace explicitly (it's the first bar trace)
+    lit_vol_trace = page.locator(".trace.bars").first
+    volume_bars = lit_vol_trace.locator(".point")
+    
     expect(volume_bars.first, "First volume bar is visible").to_be_visible()
-    bar_count = volume_bars.count()
-    verify(bar_count > 0, f"Volume chart has {bar_count} bars")
     
-    hover_labels = page.evaluate('''() => {
-        const gd = document.querySelector("#order_chart .js-plotly-plot");
-        if (!gd || !gd.data) return [];
-        const barTrace = gd.data.find(t => t.type === 'bar');
-        return (barTrace && barTrace.customdata) ? barTrace.customdata : [];
-    }''')
+    # Interaction Test: Hover over the first bar
+    first_bar = volume_bars.first
+    box = first_bar.bounding_box()
+    if box:
+        LOGGER.info(f"Hovering first bar at {box['x'] + box['width']/2}, {box['y'] + box['height']/2}")
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.move(box["x"] + box["width"] / 2 + 1, box["y"] + box["height"] / 2 + 1)
+    else:
+        first_bar.hover(force=True)
+        
+    tooltip_layer = page.locator(".hoverlayer")
+    expect(tooltip_layer, "Tooltip layer visible on hover").to_be_visible(timeout=3000)
     
-    verify(len(hover_labels) > 0, "Volume bars have hover labels")
-    verify("Open" in str(hover_labels[0]), f"First bar labeled 'Open': {hover_labels[0]}")
-    verify("Close" in str(hover_labels[-1]), f"Last bar labeled 'Close': {hover_labels[-1]}")
+    tooltip_text = tooltip_layer.text_content()
+    LOGGER.info(f"Hover text found on first bar: '{tooltip_text}'")
+    
+    verify("Open" in tooltip_text, f"First bar tooltip contains 'Open' (Got: '{tooltip_text}')")
+
+
+@pytest.mark.anyio
+def test_volume_chart_close_label(page: Page, app: ShinyAppProc):
+    """Test specifically for the Close bar hover label."""
+    LOGGER.info("Starting test_volume_chart_close_label")
+    page.goto(app.url)
+    page.locator("#query_btn").click()
+    
+    orders_table = page.locator("#orders_table")
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row, "First order row is visible").to_be_visible()
+    first_row.click()
+    
+    page.get_by_text("Chart", exact=True).click()
+    expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
+    
+    # Target the Lit Volume trace explicitly (it's the first bar trace)
+    lit_vol_trace = page.locator(".trace.bars").first
+    volume_bars = lit_vol_trace.locator(".point")
+    
+    # Ensure chart is zoomed/scrolled to show the end? 
+    # The default view for oid10001 (09:30-16:00) should cover it.
+    
+    last_bar = volume_bars.last
+    last_bar.scroll_into_view_if_needed()
+    expect(last_bar, "Last volume bar is visible").to_be_visible()
+    
+    box_last = last_bar.bounding_box()
+    if box_last:
+        LOGGER.info(f"Hovering last bar at {box_last['x'] + box_last['width']/2}, {box_last['y'] + box_last['height']/2}")
+        page.mouse.move(box_last["x"] + box_last["width"] / 2, box_last["y"] + box_last["height"] / 2)
+        page.mouse.move(box_last["x"] + box_last["width"] / 2 + 1, box_last["y"] + box_last["height"] / 2 + 1)
+    else:
+        last_bar.hover(force=True)
+        
+    tooltip_layer = page.locator(".hoverlayer")
+    expect(tooltip_layer, "Tooltip visible on last bar hover").to_be_visible(timeout=3000)
+    
+    tooltip_text_last = tooltip_layer.text_content()
+    LOGGER.info(f"Hover text found on last bar: '{tooltip_text_last}'")
+    
+    verify("Close" in tooltip_text_last, f"Last bar tooltip contains 'Close' (Got: '{tooltip_text_last}')")
 
 @pytest.mark.anyio
 def test_range_slider_presence(page: Page, app: ShinyAppProc):
