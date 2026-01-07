@@ -287,7 +287,7 @@ def create_order_viz(
 	close_x_val = close_bin_time.strftime("%Y-%m-%dT%H:%M:%S") if not close_rows.empty else None
 
 	if not plot_vol.empty:
-		plot_vol = plot_vol.sort_values("Time")
+		plot_vol = plot_vol.sort_values("Time").reset_index(drop=True)
 		vol_time_values = plot_vol["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
 		hover_labels = (
 			plot_vol["HoverLabel"].astype(str).tolist()
@@ -311,13 +311,13 @@ def create_order_viz(
 				
 		custom_data = list(zip(hover_labels, total_vols, pct_dark_list))
 		
-		# Simplified tooltip: time range, Volume, Dark%
-		tooltip_template = (
-			"%{customdata[0]}"
-			"<br>Volume: %{customdata[1]:,}"
-			"<br>Dark%: %{customdata[2]:.1f}%"
-			"<extra></extra>"
-		)
+		# Build hovertext strings directly for each bar
+		hover_texts = []
+		for label, vol, dark_pct in custom_data:
+			hover_texts.append(f"{label}<br>Volume: {vol:,}<br>Dark%: {dark_pct:.1f}%")
+
+		# Extract just the hover labels for customdata (used by dynamic binning tests)
+		hover_labels = [item[0] for item in custom_data]
 
 		# Trace 1: Lit Volume (Bottom of stack)
 		fig.add_trace(
@@ -326,12 +326,13 @@ def create_order_viz(
 				y=lit_vols,
 				name="Lit Volume",
 				offset=0,
-				customdata=custom_data,
+				hovertext=hover_texts,
+				customdata=hover_labels,
+				hoverinfo="text",
 				marker_color=volume_color,
 				marker_line_width=0.5,
 				marker_line_color=grid_color,
 				showlegend=False,
-				hovertemplate=tooltip_template,
 			),
 			row=2,
 			col=1,
@@ -611,7 +612,7 @@ def create_order_viz(
 		rangeslider=dict(
 			visible=True,
 			thickness=0.12,  # 20% larger than original
-			# No 'range' constraint - allows user to freely scroll entire data range
+			range=x_range_slider,  # Set full extent of rangeslider to slider bounds
 		),
 	)
 	fig.update_yaxes(

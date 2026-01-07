@@ -52,9 +52,12 @@ class DataServiceBase(ABC):
         - ExecQty: total executed quantity in this bin
         - Volume: market volume in this bin
         - PRate: participation rate (ExecQty / Volume), capped at 100%
+        - Kind: "Regular", "Open", or "Close"
         
         This method works with any DataService implementation by using
         the abstract get_executions() and get_volume_data() methods.
+        
+        Always includes Open and Close auction times with PRate (0 if no fills).
         """
         # Get raw executions
         exec_df = self.get_executions(date, orderid)
@@ -62,41 +65,67 @@ class DataServiceBase(ABC):
         # Get volume data at the specified interval
         volume_df = self.get_volume_data(date, ticker, exch_open_time, exch_close_time, interval)
         
+        # Calculate bin size for auction time positioning
+        if interval == "5min":
+            bin_delta = pd.Timedelta(minutes=5)
+        elif interval == "2min":
+            bin_delta = pd.Timedelta(minutes=2)
+        elif interval == "1min":
+            bin_delta = pd.Timedelta(minutes=1)
+        else:  # 30s
+            bin_delta = pd.Timedelta(seconds=30)
+        
+        exch_open_dt = pd.to_datetime(f"{date} {exch_open_time}:00")
+        exch_close_dt = pd.to_datetime(f"{date} {exch_close_time}:00")
+        
+        # Open auction time is exch_open - bin_size (same as volume chart)
+        open_auction_time = exch_open_dt - bin_delta
+        # Close auction time is exch_close (same as volume chart)
+        close_auction_time = exch_close_dt
+        
         if exec_df.empty:
             # No executions - return volume bins with zero ExecQty and PRate
             result = volume_df[["Time", "Volume"]].copy()
             result["ExecQty"] = 0
             result["PRate"] = 0.0
+            result["Kind"] = "Regular"
             return result
         
         # Bin executions to match volume intervals
         exec_df = exec_df.copy()
         exec_df["Time"] = pd.to_datetime(exec_df["Time"])
         
+        # Separate auction fills from regular fills
+        has_kind = "Kind" in exec_df.columns
+        if has_kind:
+            open_fills = exec_df[exec_df["Kind"] == "Open"]
+            close_fills = exec_df[exec_df["Kind"] == "Close"]
+            regular_fills = exec_df[(exec_df["Kind"] != "Open") & (exec_df["Kind"] != "Close")]
+        else:
+            open_fills = pd.DataFrame()
+            close_fills = pd.DataFrame()
+            regular_fills = exec_df
+        
         # Determine resample rule from interval string
         resample_rule = interval
-        if interval == "30s":
-            resample_rule = "30s"
-        elif interval == "1min":
-            resample_rule = "1min"
-        elif interval == "2min":
-            resample_rule = "2min"
-        elif interval == "5min":
-            resample_rule = "5min"
         
-        # Aggregate execution sizes per bin
-        binned_exec = (
-            exec_df.set_index("Time")[["Size"]]
-            .resample(resample_rule)
-            .sum()
-            .reset_index()
-            .rename(columns={"Size": "ExecQty"})
-        )
+        # Aggregate regular execution sizes per bin
+        if not regular_fills.empty:
+            binned_exec = (
+                regular_fills.set_index("Time")[["Size"]]
+                .resample(resample_rule)
+                .sum()
+                .reset_index()
+                .rename(columns={"Size": "ExecQty"})
+            )
+        else:
+            binned_exec = pd.DataFrame(columns=["Time", "ExecQty"])
         
         # Filter out auction rows (Open/Close) from volume for merging
         regular_volume = volume_df[volume_df.get("Kind", "Regular") == "Regular"].copy()
+        auction_volume = volume_df[volume_df.get("Kind", "Regular") != "Regular"].copy()
         
-        # Merge with volume data
+        # Merge regular bins with volume data
         merged = pd.merge(
             regular_volume[["Time", "Volume"]],
             binned_exec,
@@ -104,16 +133,50 @@ class DataServiceBase(ABC):
             how="left"
         )
         merged["ExecQty"] = merged["ExecQty"].fillna(0).astype(int)
+        merged["Kind"] = "Regular"
         
-        # Calculate PRate (capped at 100%)
-        # If volume is 0, PRate is 100% if there are executions, else 0%
+        # Calculate PRate for regular bins (capped at 100%)
         merged["PRate"] = np.where(
             merged["Volume"] > 0,
             (merged["ExecQty"] / merged["Volume"] * 100).clip(upper=100),
             np.where(merged["ExecQty"] > 0, 100.0, 0.0)
         )
         
-        return merged
+        # Add Open auction PRate
+        open_exec_qty = int(open_fills["Size"].sum()) if not open_fills.empty else 0
+        open_vol_row = auction_volume[auction_volume.get("Kind", "") == "Open"]
+        open_volume = int(open_vol_row["Volume"].sum()) if not open_vol_row.empty else 0
+        open_prate = (open_exec_qty / open_volume * 100) if open_volume > 0 else (100.0 if open_exec_qty > 0 else 0.0)
+        open_prate = min(open_prate, 100.0)
+        
+        open_row = pd.DataFrame([{
+            "Time": open_auction_time,
+            "Volume": open_volume,
+            "ExecQty": open_exec_qty,
+            "PRate": open_prate,
+            "Kind": "Open",
+        }])
+        
+        # Add Close auction PRate
+        close_exec_qty = int(close_fills["Size"].sum()) if not close_fills.empty else 0
+        close_vol_row = auction_volume[auction_volume.get("Kind", "") == "Close"]
+        close_volume = int(close_vol_row["Volume"].sum()) if not close_vol_row.empty else 0
+        close_prate = (close_exec_qty / close_volume * 100) if close_volume > 0 else (100.0 if close_exec_qty > 0 else 0.0)
+        close_prate = min(close_prate, 100.0)
+        
+        close_row = pd.DataFrame([{
+            "Time": close_auction_time,
+            "Volume": close_volume,
+            "ExecQty": close_exec_qty,
+            "PRate": close_prate,
+            "Kind": "Close",
+        }])
+        
+        # Combine all rows and sort by time
+        result = pd.concat([open_row, merged, close_row], ignore_index=True)
+        result = result.sort_values("Time").reset_index(drop=True)
+        
+        return result
 
 
 def _build_venue_mapping() -> dict[str, dict[str, str]]:
@@ -363,6 +426,65 @@ def _generate_stock_and_execution_data(
             "spreadcapture": spreadcapture,
         }
     )
+
+    # Add Open/Close auction fills if order starts at market open or ends at market close
+    open_dt = pd.to_datetime(f"{date} {exch_open_time}:00")
+    close_dt = pd.to_datetime(f"{date} {exch_close_time}:00")
+    
+    auction_fills = []
+    
+    if start_time:
+        start_dt = pd.to_datetime(f"{date} {start_time}:00")
+        # If order starts at market open, add an Open auction fill
+        if start_dt == open_dt:
+            # Open auction fill: use same time as volume Open bar (open_time - bin_size)
+            # We'll use a standard offset; the plotly code will align it
+            open_auction_time = open_dt  # Will be adjusted in get_binned_analytics
+            # Generate auction fill size (10-30% of total exec qty)
+            auction_pct = exec_rng.uniform(0.10, 0.30)
+            auction_size = int(exec_qty * auction_pct) if exec_qty else int(exec_rng.integers(5000, 20000))
+            # Price near open
+            open_price = float(stock_data.iloc[0]["Bid"] + stock_data.iloc[0]["Ask"]) / 2
+            auction_fills.append({
+                "Time": open_auction_time,
+                "Price": open_price,
+                "Size": auction_size,
+                "Venue": "OPEN",  # Special venue for auction
+                "Bid": stock_data.iloc[0]["Bid"],
+                "Ask": stock_data.iloc[0]["Ask"],
+                "spreadcapture": 0.5,  # Assume mid for auctions
+                "Kind": "Open",
+            })
+    
+    if end_time:
+        end_dt = pd.to_datetime(f"{date} {end_time}:00")
+        # If order ends at market close, add a Close auction fill
+        if end_dt == close_dt:
+            # Close auction fill
+            close_auction_time = close_dt
+            auction_pct = exec_rng.uniform(0.10, 0.30)
+            auction_size = int(exec_qty * auction_pct) if exec_qty else int(exec_rng.integers(5000, 20000))
+            # Price near close
+            close_price = float(stock_data.iloc[-1]["Bid"] + stock_data.iloc[-1]["Ask"]) / 2
+            auction_fills.append({
+                "Time": close_auction_time,
+                "Price": close_price,
+                "Size": auction_size,
+                "Venue": "CLOSE",  # Special venue for auction
+                "Bid": stock_data.iloc[-1]["Bid"],
+                "Ask": stock_data.iloc[-1]["Ask"],
+                "spreadcapture": 0.5,
+                "Kind": "Close",
+            })
+    
+    # Add auction fills to execution data
+    if auction_fills:
+        auction_df = pd.DataFrame(auction_fills)
+        # Ensure Kind column exists in execution_data
+        if "Kind" not in execution_data.columns:
+            execution_data["Kind"] = "Regular"
+        execution_data = pd.concat([execution_data, auction_df], ignore_index=True)
+        execution_data = execution_data.sort_values("Time").reset_index(drop=True)
 
     return stock_data, execution_data
 
