@@ -110,38 +110,54 @@ function resizeAllPlotly() {
             const tEnd = _toEpochMs(xEnd);
             const rangeMins = (tEnd - tStart) / 60000;
 
-            // Dynamic bin switching - Thresholds: >160m=5min, 80-160m=2min, 40-80m=1min, <40m=30s
+            // Dynamic bin switching and range syncing
             if (window.Shiny && !Number.isNaN(rangeMins)) {
+                // 1. Determine the correct bin size for this range
                 const newBinSize = rangeMins > 160 ? '5min' : (rangeMins > 80 ? '2min' : (rangeMins >= 40 ? '1min' : '30s'));
 
+                // Initialize tracking flags if not present
                 if (!graphDiv._lastBinSize) {
                     const layoutRange = graphDiv.layout?.xaxis?.range;
                     if (layoutRange && layoutRange.length === 2) {
-                        const initMins = (_toEpochMs(layoutRange[1]) - _toEpochMs(layoutRange[0])) / 60000;
-                        graphDiv._lastBinSize = initMins > 160 ? '5min' : (initMins > 80 ? '2min' : (initMins >= 40 ? '1min' : '30s'));
-                        graphDiv._lastRangeMins = initMins;
+                        const iMins = (_toEpochMs(layoutRange[1]) - _toEpochMs(layoutRange[0])) / 60000;
+                        graphDiv._lastBinSize = iMins > 160 ? '5min' : (iMins > 80 ? '2min' : (iMins >= 40 ? '1min' : '30s'));
                     } else {
                         graphDiv._lastBinSize = '5min';
-                        graphDiv._lastRangeMins = 999;
                     }
                 }
 
-                const prevBinSize = graphDiv._lastBinSize;
-                const prevRangeMins = graphDiv._lastRangeMins || 999;
+                // 2. Handle Bin Size Changes (Higher priority, short debounce)
+                if (newBinSize !== graphDiv._lastBinSize) {
+                    if (graphDiv._binChangeTimeout) clearTimeout(graphDiv._binChangeTimeout);
+                    if (graphDiv._rangeSyncTimeout) clearTimeout(graphDiv._rangeSyncTimeout);
 
-                // Trigger re-render if bin size changed OR if range changed significantly (>10%)
-                const rangeChangedSignificantly = Math.abs(rangeMins - prevRangeMins) / prevRangeMins > 0.1;
+                    graphDiv._binChangeTimeout = setTimeout(() => {
+                        graphDiv._lastBinSize = newBinSize;
+                        const orderKey = graphDiv._currentOrderKey || null;
 
-                if (newBinSize !== prevBinSize || rangeChangedSignificantly) {
-                    graphDiv._lastBinSize = newBinSize;
-                    graphDiv._lastRangeMins = rangeMins;
-                    Shiny.setInputValue('chart_range_mins', rangeMins);
-                    // Store range with order key so Python can verify it's for the current order
-                    const orderKey = graphDiv._currentOrderKey || null;
-                    Shiny.setInputValue('chart_x_range', {
-                        range: [xStart, xEnd],
-                        orderKey: orderKey
-                    });
+                        // Bundle everything into one message to avoid race conditions
+                        Shiny.setInputValue('chart_state', {
+                            rangeMins: rangeMins,
+                            xRange: [xStart, xEnd],
+                            orderKey: orderKey,
+                            timestamp: Date.now()
+                        });
+                    }, 100);
+                }
+                // 3. Handle Range Syncing (Lower priority, longer debounce to prevent flicker)
+                else {
+                    if (graphDiv._rangeSyncTimeout) clearTimeout(graphDiv._rangeSyncTimeout);
+
+                    graphDiv._rangeSyncTimeout = setTimeout(() => {
+                        const orderKey = graphDiv._currentOrderKey || null;
+
+                        Shiny.setInputValue('chart_state', {
+                            rangeMins: rangeMins,
+                            xRange: [xStart, xEnd],
+                            orderKey: orderKey,
+                            timestamp: Date.now()
+                        });
+                    }, 400);
                 }
             }
 

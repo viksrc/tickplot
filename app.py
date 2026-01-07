@@ -264,10 +264,11 @@ def server(input, output, session):
         
     @reactive.calc
     def volume_bin_size():
-        if "chart_range_mins" not in input:
-            range_mins = None
-        else:
-            range_mins = input.chart_range_mins()
+        range_mins = None
+        if "chart_state" in input:
+            state = input.chart_state()
+            if state and isinstance(state, dict):
+                range_mins = state.get("rangeMins")
         
         if range_mins is None:
             # Initial state: check the duration of the selected order
@@ -282,31 +283,16 @@ def server(input, output, session):
                 st_parts = st_str.split(":")
                 et_parts = et_str.split(":")
                 duration = (int(et_parts[0])*60 + int(et_parts[1])) - (int(st_parts[0])*60 + int(st_parts[1]))
-                
-                # Add padding similar to chart logic
-                if duration > 120: pad = 60
-                elif duration > 20: pad = 20
-                else: pad = 10
-                
-                total_range = duration + pad
-                if total_range > 160:
-                    return "5min"
-                elif total_range > 80:
-                    return "2min"
-                # Updated switch logic: 40-80m -> 1min, < 40m -> 30s
-                elif total_range >= 40:
-                    return "1min"
-                return "30s"
-            except (ValueError, AttributeError):
-                return "5min"
+                range_mins = duration
+            except (ValueError, AttributeError, IndexError):
+                range_mins = 999
 
-        if range_mins > 160:
-            return "5min"
-        elif range_mins > 80:
-            return "2min"
-        elif range_mins >= 40:
-            return "1min"
-        return "30s"
+        if range_mins > 160: res = "5min"
+        elif range_mins > 80: res = "2min"
+        elif range_mins >= 40: res = "1min"
+        else: res = "30s"
+        
+        return res
 
     @reactive.calc
     def current_order_enriched():
@@ -528,6 +514,8 @@ def server(input, output, session):
         exch_close_time = str(order_detail["ExchCloseTime"])
 
         bin_size = volume_bin_size()
+        with reactive.isolate():
+            state = input.chart_state() if "chart_state" in input else None
 
         # Calculate initial view range based on order duration
         st_parts = str(start_time_str).split(":")
@@ -581,12 +569,25 @@ def server(input, output, session):
             f"{date}T{view_end_h:02d}:{view_end_m:02d}:{view_end_s:02d}",
         ]
 
-        # Only use saved slider position if it's for the SAME order (date:orderid)
-        # Otherwise, reset to default view for newly selected order
+        # PERFORMANCE FIX: Isolate the state access so we don't re-render the WHOLE chart
+        # for every single pixel of zoom/pan. We only want to re-render if the 
+        # reactive dependency 'volume_bin_size()' actually changes its return value.
+        with reactive.isolate():
+            state = input.chart_state() if "chart_state" in input else None
+        
+        # ... logic to determine x_range remains the same, but now it doesn't trigger renders ...
         current_order_key = f"{date}:{orderid}"
         x_range = default_x_range
-        if "chart_x_range" in input:
-            saved_data = input.chart_x_range()
+        
+        if state and isinstance(state, dict):
+            saved_range = state.get("xRange")
+            saved_key = state.get("orderKey")
+            if saved_range and len(saved_range) == 2 and saved_key == current_order_key:
+                x_range = saved_range
+        elif "chart_x_range" in input:
+            # Fallback for legacy
+            with reactive.isolate():
+                saved_data = input.chart_x_range()
             if saved_data and isinstance(saved_data, dict):
                 saved_range = saved_data.get("range")
                 saved_key = saved_data.get("orderKey")
