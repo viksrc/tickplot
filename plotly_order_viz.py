@@ -788,6 +788,14 @@ def create_order_viz(
 	slider_end_mins = int(slider_end_parts[0]) * 60 + int(slider_end_parts[1])
 	slider_total_mins = slider_end_mins - min_left_mins
 	
+	# Calculate plot domain in paper coordinates. 
+	# The rangeslider's left edge aligns with paper x≈0 (the Y-axis labels are in the margin).
+	# However, the right side is compressed by the PRate% secondary Y-axis.
+	# Only scale the right side down to fit within the visible area.
+	plot_left = 0.0  # Left edge is correct at 0
+	plot_right = 0.95  # Right edge needs compression due to PRate% axis
+	plot_width = plot_right - plot_left
+	
 	# Generate time labels every 30 minutes from open to close
 	time_labels = []
 	
@@ -798,7 +806,9 @@ def create_order_viz(
 		h, m = divmod(current_mins, 60)
 		time_str = f"{h:02d}:{m:02d}"
 		# Calculate x position as fraction of SLIDER range (accounts for padding)
-		x_pos = (current_mins - min_left_mins) / slider_total_mins if slider_total_mins > 0 else 0
+		data_frac = (current_mins - min_left_mins) / slider_total_mins if slider_total_mins > 0 else 0
+		# Map data fraction to paper coordinates (only right side needs adjustment)
+		x_pos = plot_left + data_frac * plot_width
 		time_labels.append((time_str, x_pos))
 		
 		# Move to next 30-min boundary
