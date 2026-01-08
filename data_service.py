@@ -322,6 +322,33 @@ def _generate_stock_and_execution_data(
     exec_seed = seed + 123
     exec_rng = np.random.default_rng(exec_seed)
 
+    # Pre-calculate auction quantities to ensure total matches exec_qty
+    auction_specs = []
+    total_auction_qty = 0
+    
+    open_dt_check = pd.to_datetime(f"{date} {exch_open_time}:00")
+    close_dt_check = pd.to_datetime(f"{date} {exch_close_time}:00")
+    
+    if start_time:
+        st_dt = pd.to_datetime(f"{date} {start_time}:00")
+        if st_dt == open_dt_check:
+            a_pct = exec_rng.uniform(0.10, 0.30)
+            a_size = int(exec_qty * a_pct) if exec_qty else int(exec_rng.integers(5000, 20000))
+            total_auction_qty += a_size
+            auction_specs.append({"type": "Open", "size": a_size, "time": open_dt_check})
+
+    if end_time:
+        et_dt = pd.to_datetime(f"{date} {end_time}:00")
+        if et_dt == close_dt_check:
+            a_pct = exec_rng.uniform(0.10, 0.30)
+            a_size = int(exec_qty * a_pct) if exec_qty else int(exec_rng.integers(5000, 20000))
+            total_auction_qty += a_size
+            auction_specs.append({"type": "Close", "size": a_size, "time": close_dt_check})
+            
+    eff_exec_qty = exec_qty
+    if exec_qty is not None and total_auction_qty > 0:
+        eff_exec_qty = max(0, exec_qty - total_auction_qty)
+
     # Determine execution times
     if start_time and end_time:
         start_dt = pd.to_datetime(f"{date} {start_time}:00")
@@ -356,10 +383,13 @@ def _generate_stock_and_execution_data(
     log_sizes = exec_rng.lognormal(mean=6.0, sigma=0.8, size=50)
     raw_sizes = np.clip(log_sizes, 50, 5000)
 
-    if exec_qty:
-        scale_factor = exec_qty / raw_sizes.sum()
-        exec_sizes = np.round(raw_sizes * scale_factor).astype(int)
-        exec_sizes[-1] = int(exec_qty) - int(exec_sizes[:-1].sum())
+    if exec_qty is not None:
+        if eff_exec_qty > 0:
+            scale_factor = eff_exec_qty / raw_sizes.sum()
+            exec_sizes = np.round(raw_sizes * scale_factor).astype(int)
+            exec_sizes[-1] = int(eff_exec_qty) - int(exec_sizes[:-1].sum())
+        else:
+            exec_sizes = np.zeros_like(raw_sizes, dtype=int)
     else:
         exec_sizes = raw_sizes.astype(int)
 
@@ -427,55 +457,33 @@ def _generate_stock_and_execution_data(
         }
     )
 
-    # Add Open/Close auction fills if order starts at market open or ends at market close
-    open_dt = pd.to_datetime(f"{date} {exch_open_time}:00")
-    close_dt = pd.to_datetime(f"{date} {exch_close_time}:00")
-    
+    # Add Open/Close auction fills using pre-calculated specs
     auction_fills = []
     
-    if start_time:
-        start_dt = pd.to_datetime(f"{date} {start_time}:00")
-        # If order starts at market open, add an Open auction fill
-        if start_dt == open_dt:
-            # Open auction fill: use same time as volume Open bar (open_time - bin_size)
-            # We'll use a standard offset; the plotly code will align it
-            open_auction_time = open_dt  # Will be adjusted in get_binned_analytics
-            # Generate auction fill size (10-30% of total exec qty)
-            auction_pct = exec_rng.uniform(0.10, 0.30)
-            auction_size = int(exec_qty * auction_pct) if exec_qty else int(exec_rng.integers(5000, 20000))
-            # Price near open
-            open_price = float(stock_data.iloc[0]["Bid"] + stock_data.iloc[0]["Ask"]) / 2
-            auction_fills.append({
-                "Time": open_auction_time,
-                "Price": open_price,
-                "Size": auction_size,
-                "Venue": "OPEN",  # Special venue for auction
-                "Bid": stock_data.iloc[0]["Bid"],
-                "Ask": stock_data.iloc[0]["Ask"],
-                "spreadcapture": 0.5,  # Assume mid for auctions
-                "Kind": "Open",
-            })
-    
-    if end_time:
-        end_dt = pd.to_datetime(f"{date} {end_time}:00")
-        # If order ends at market close, add a Close auction fill
-        if end_dt == close_dt:
-            # Close auction fill
-            close_auction_time = close_dt
-            auction_pct = exec_rng.uniform(0.10, 0.30)
-            auction_size = int(exec_qty * auction_pct) if exec_qty else int(exec_rng.integers(5000, 20000))
-            # Price near close
-            close_price = float(stock_data.iloc[-1]["Bid"] + stock_data.iloc[-1]["Ask"]) / 2
-            auction_fills.append({
-                "Time": close_auction_time,
-                "Price": close_price,
-                "Size": auction_size,
-                "Venue": "CLOSE",  # Special venue for auction
-                "Bid": stock_data.iloc[-1]["Bid"],
-                "Ask": stock_data.iloc[-1]["Ask"],
-                "spreadcapture": 0.5,
-                "Kind": "Close",
-            })
+    for spec in auction_specs:
+        atype, size, time = spec["type"], spec["size"], spec["time"]
+        
+        if atype == "Open":
+             # Price near open
+             price = float(stock_data.iloc[0]["Bid"] + stock_data.iloc[0]["Ask"]) / 2
+             bid, ask = stock_data.iloc[0]["Bid"], stock_data.iloc[0]["Ask"]
+             venue = "OPEN"
+        else:
+             # Price near close
+             price = float(stock_data.iloc[-1]["Bid"] + stock_data.iloc[-1]["Ask"]) / 2
+             bid, ask = stock_data.iloc[-1]["Bid"], stock_data.iloc[-1]["Ask"]
+             venue = "CLOSE"
+             
+        auction_fills.append({
+            "Time": time,
+            "Price": price,
+            "Size": size,
+            "Venue": venue,
+            "Bid": bid,
+            "Ask": ask,
+            "spreadcapture": 0.5,
+            "Kind": atype
+        })
     
     # Add auction fills to execution data
     if auction_fills:
