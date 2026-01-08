@@ -28,6 +28,14 @@ function resizeAllPlotly() {
         return new Date(s).getTime();
     }
 
+    // Helper to calculate bin size for a given range in minutes
+    function _getBinSizeForRange(rangeMins) {
+        if (rangeMins > 160) return '5min';
+        if (rangeMins > 80) return '2min';
+        if (rangeMins >= 40) return '1min';
+        return '30s';
+    }
+
     function _bindRescaling(graphDiv) {
         if (!graphDiv || graphDiv._hasRescaling) return;
         if (typeof graphDiv.on !== 'function') return; // Plotly hasn't enhanced it yet.
@@ -42,6 +50,128 @@ function resizeAllPlotly() {
 
         // Ensure Plotly fits the container on first bind
         setTimeout(() => _safePlotlyResize(graphDiv), 50);
+
+        // Anchor-based button system state - persist across re-renders using sessionStorage
+        // Use orderKey to namespace the state so different orders don't conflict
+        const orderKey = graphDiv._currentOrderKey || 'default';
+        const storedState = sessionStorage.getItem('chartButtonState_' + orderKey);
+        let savedState = storedState ? JSON.parse(storedState) : null;
+        
+        // anchor: "first" or "last" - determines which end duration applies from
+        // selectedDuration: null or number (mins) - the last selected duration
+        graphDiv._anchor = savedState?.anchor || "first";
+        graphDiv._selectedDuration = savedState?.duration || null;
+        
+        function _saveButtonState() {
+            const state = { anchor: graphDiv._anchor, duration: graphDiv._selectedDuration };
+            sessionStorage.setItem('chartButtonState_' + orderKey, JSON.stringify(state));
+        }
+
+        // Handle button clicks - buttons use method="skip" so we control the behavior
+        graphDiv.on('plotly_buttonclicked', function (eventdata) {
+            console.log('Button clicked! eventdata:', eventdata);
+            if (!eventdata || !eventdata.button || !eventdata.button.args) return;
+            
+            const args = eventdata.button.args[0];
+            console.log('Button args:', args);
+            if (!args || !args.action) return;
+            
+            const meta = graphDiv.layout?.meta || {};
+            const durationData = meta.durationData || {};
+            const defaultRange = meta.defaultRange || [];
+            console.log('meta:', meta, 'durationData:', durationData, 'defaultRange:', defaultRange);
+            
+            let targetRange = null;
+            
+            if (args.action === "anchor") {
+                // First or Last button - set anchor
+                graphDiv._anchor = args.anchor;  // "first" or "last"
+                
+                // If a duration was previously selected, apply it from new anchor
+                if (graphDiv._selectedDuration) {
+                    const durData = durationData[String(graphDiv._selectedDuration)];
+                    if (durData) {
+                        const mins = graphDiv._selectedDuration;
+                        if (graphDiv._anchor === "last") {
+                            // Apply duration backward from effective end
+                            const endMs = _toEpochMs(durData.effEnd);
+                            const startMs = endMs - (mins * 60000);
+                            targetRange = [new Date(startMs).toISOString().slice(0, 19), durData.effEnd];
+                        } else {
+                            // Apply duration forward from effective start
+                            const startMs = _toEpochMs(durData.effStart);
+                            const endMs = startMs + (mins * 60000);
+                            targetRange = [durData.effStart, new Date(endMs).toISOString().slice(0, 19)];
+                        }
+                    }
+                }
+                // If no duration selected yet, anchor click does nothing to the view
+                if (!targetRange) return;
+                
+            } else if (args.action === "duration") {
+                // Duration button - apply duration from current anchor
+                const mins = args.mins;
+                graphDiv._selectedDuration = mins;  // remember selected duration
+                
+                const durData = durationData[String(mins)];
+                console.log('Duration button clicked:', mins, 'durData:', durData, 'anchor:', graphDiv._anchor);
+                if (!durData) {
+                    console.error('No durData found for', mins, 'durationData:', durationData);
+                    return;
+                }
+                
+                if (graphDiv._anchor === "last") {
+                    // Apply duration backward from effective end
+                    const endMs = _toEpochMs(durData.effEnd);
+                    const startMs = endMs - (mins * 60000);
+                    targetRange = [new Date(startMs).toISOString().slice(0, 19), durData.effEnd];
+                } else {
+                    // Apply duration forward from effective start  
+                    const startMs = _toEpochMs(durData.effStart);
+                    const endMs = startMs + (mins * 60000);
+                    targetRange = [durData.effStart, new Date(endMs).toISOString().slice(0, 19)];
+                }
+                console.log('Calculated targetRange:', targetRange);
+                
+            } else if (args.action === "all") {
+                // All button - restore to initial view (same as order load)
+                targetRange = defaultRange;
+                graphDiv._anchor = "first";  // reset anchor
+                graphDiv._selectedDuration = null;  // clear duration selection
+            }
+            
+            // Save state for persistence across re-renders
+            _saveButtonState();
+            
+            if (!targetRange || targetRange.length !== 2) return;
+
+            const tStart = _toEpochMs(targetRange[0]);
+            const tEnd = _toEpochMs(targetRange[1]);
+            const rangeMins = (tEnd - tStart) / 60000;
+            
+            const newBinSize = _getBinSizeForRange(rangeMins);
+            const currentBinSize = graphDiv._lastBinSize || graphDiv.layout?.meta?.binSize || '5min';
+            
+            if (newBinSize !== currentBinSize) {
+                // Bin size changes: send to server, let server render with correct bins
+                // Don't do local relayout - it would show wrong bins
+                if (window.Shiny) {
+                    const orderKey = graphDiv._currentOrderKey || null;
+                    graphDiv._lastBinSize = newBinSize;
+                    Shiny.setInputValue('chart_state', {
+                        rangeMins: rangeMins,
+                        xRange: targetRange,
+                        orderKey: orderKey,
+                        timestamp: Date.now()
+                    });
+                }
+            } else {
+                // Same bin size: do local relayout (fast, no server trip)
+                if (window.Plotly) {
+                    Plotly.relayout(graphDiv, {'xaxis.range': targetRange});
+                }
+            }
+        });
 
         graphDiv.on('plotly_relayout', function (eventdata) {
             // Detect changes on MAIN axis (xaxis) or SLIDER axis (xaxis3).
@@ -115,21 +245,27 @@ function resizeAllPlotly() {
                 // 1. Determine the correct bin size for this range
                 const newBinSize = rangeMins > 160 ? '5min' : (rangeMins > 80 ? '2min' : (rangeMins >= 40 ? '1min' : '30s'));
 
-                // Initialize tracking flags if not present
+                // Initialize tracking flags from server-rendered bin size (stored in metadata)
                 if (!graphDiv._lastBinSize) {
-                    const layoutRange = graphDiv.layout?.xaxis?.range;
-                    if (layoutRange && layoutRange.length === 2) {
-                        const iMins = (_toEpochMs(layoutRange[1]) - _toEpochMs(layoutRange[0])) / 60000;
-                        graphDiv._lastBinSize = iMins > 160 ? '5min' : (iMins > 80 ? '2min' : (iMins >= 40 ? '1min' : '30s'));
+                    // Use the bin size the server rendered with, NOT the current view range
+                    const serverBinSize = graphDiv.layout?.meta?.binSize;
+                    if (serverBinSize) {
+                        graphDiv._lastBinSize = serverBinSize;
                     } else {
-                        graphDiv._lastBinSize = '5min';
+                        // Fallback: calculate from initial layout range
+                        const layoutRange = graphDiv.layout?.xaxis?.range;
+                        if (layoutRange && layoutRange.length === 2) {
+                            const iMins = (_toEpochMs(layoutRange[1]) - _toEpochMs(layoutRange[0])) / 60000;
+                            graphDiv._lastBinSize = iMins > 160 ? '5min' : (iMins > 80 ? '2min' : (iMins >= 40 ? '1min' : '30s'));
+                        } else {
+                            graphDiv._lastBinSize = '5min';
+                        }
                     }
                 }
 
-                // 2. Handle Bin Size Changes (Higher priority, short debounce)
+                // 2. Handle Bin Size Changes - ONLY send to server when bin size changes
                 if (newBinSize !== graphDiv._lastBinSize) {
                     if (graphDiv._binChangeTimeout) clearTimeout(graphDiv._binChangeTimeout);
-                    if (graphDiv._rangeSyncTimeout) clearTimeout(graphDiv._rangeSyncTimeout);
 
                     graphDiv._binChangeTimeout = setTimeout(() => {
                         graphDiv._lastBinSize = newBinSize;
@@ -144,21 +280,8 @@ function resizeAllPlotly() {
                         });
                     }, 100);
                 }
-                // 3. Handle Range Syncing (Lower priority, longer debounce to prevent flicker)
-                else {
-                    if (graphDiv._rangeSyncTimeout) clearTimeout(graphDiv._rangeSyncTimeout);
-
-                    graphDiv._rangeSyncTimeout = setTimeout(() => {
-                        const orderKey = graphDiv._currentOrderKey || null;
-
-                        Shiny.setInputValue('chart_state', {
-                            rangeMins: rangeMins,
-                            xRange: [xStart, xEnd],
-                            orderKey: orderKey,
-                            timestamp: Date.now()
-                        });
-                    }, 400);
-                }
+                // Range-only changes: DO NOT send to server - Plotly handles view client-side
+                // Sending chart_state for every pan/zoom causes unnecessary server re-renders
             }
 
             // Dynamic y-axis rescale (include executions)

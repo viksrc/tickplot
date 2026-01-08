@@ -501,8 +501,7 @@ def create_order_viz(
 			zeroline=False,
 			hoverformat="%H:%M:%S",
 		),
-		# Store order key in layout metadata so JS can track which order the chart is for
-		meta=dict(orderKey=f"{date}:{orderid}"),
+		# Meta will be set later with button-related data
 	)
 
 	# Removed unifiedhovertitle clearing to restore time display in price chart hover
@@ -538,6 +537,101 @@ def create_order_viz(
 		slider_start_iso,
 		slider_end_iso,
 	]
+
+	# Calculate button ranges for time durations from order start and end
+	start_dt = pd.to_datetime(start_time_full)
+	end_dt = pd.to_datetime(end_time_full)
+	
+	# Check if order starts at market open or ends at market close
+	exch_open_dt = pd.to_datetime(f"{date} {exch_open_time}:00")
+	exch_close_dt = pd.to_datetime(f"{date} {exch_close_time}:00")
+	
+	# Adjust effective start/end to include auction bars if applicable
+	starts_at_open = (start_dt == exch_open_dt)
+	ends_at_close = (end_dt == exch_close_dt)
+	
+	# Helper function to determine bin size based on duration (same logic as dynamic binning)
+	def get_bin_minutes_for_duration(duration_mins):
+		if duration_mins > 160:
+			return 5  # 5min bins
+		elif duration_mins > 80:
+			return 2  # 2min bins
+		elif duration_mins > 40:
+			return 1  # 1min bins
+		else:
+			return 0.5  # 30s bins
+	
+	# Helper to calculate effective start/end for a given duration
+	def get_effective_range(duration_mins):
+		bin_mins = get_bin_minutes_for_duration(duration_mins)
+		
+		# Effective start: if order starts at market open, include Open auction bar (mkt_open - bin_size)
+		eff_start_dt = exch_open_dt - pd.Timedelta(minutes=bin_mins) if starts_at_open else start_dt
+		
+		# Effective end: if order ends at market close, include Close auction bar (mkt_close + bin_size)
+		eff_end_dt = exch_close_dt + pd.Timedelta(minutes=bin_mins) if ends_at_close else end_dt
+		
+		return eff_start_dt, eff_end_dt
+	
+	# Calculate ranges for each button
+	# Store effective start/end for each duration in metadata for JS to use
+	duration_data = {}
+	for dur in [5, 15, 30, 60, 120, 240]:
+		eff_start, eff_end = get_effective_range(dur)
+		duration_data[str(dur)] = {
+			"effStart": eff_start.strftime("%Y-%m-%dT%H:%M:%S"),
+			"effEnd": eff_end.strftime("%Y-%m-%dT%H:%M:%S"),
+		}
+	
+	# Buttons: First/Last are anchors, duration buttons apply from anchor, All resets
+	time_buttons = [
+		dict(label="First", method="skip", args=[{"action": "anchor", "anchor": "first"}]),
+		dict(label="Last", method="skip", args=[{"action": "anchor", "anchor": "last"}]),
+	]
+	
+	# Add duration buttons
+	for duration_mins, label in [(5, "5m"), (15, "15m"), (30, "30m"), (60, "1h"), (120, "2h"), (240, "4h")]:
+		time_buttons.append(dict(
+			label=label,
+			method="skip",
+			args=[{"action": "duration", "mins": duration_mins}],
+		))
+	
+	# All button restores initial view
+	time_buttons.append(dict(
+		label="All",
+		method="skip",
+		args=[{"action": "all"}],
+	))
+
+	# Add all buttons via updatemenus for consistent highlighting
+	# Include duration data and default range in metadata for JS
+	fig.update_layout(
+		meta=dict(
+			orderKey=f"{date}:{orderid}",
+			binSize=bin_size,
+			durationData=duration_data,
+			defaultRange=default_x_range,
+		),
+		updatemenus=[
+			dict(
+				type="buttons",
+				direction="right",
+				x=0.42,
+				y=1.015,
+				xanchor="left",
+				yanchor="bottom",
+				bgcolor="rgba(30, 41, 59, 0.8)" if is_dark else "rgba(255, 255, 255, 0.8)",
+				bordercolor=grid_color,
+				borderwidth=1,
+				font=dict(color=font_color, size=11),
+				pad=dict(r=1, t=0, l=1, b=0),
+				showactive=True,
+				active=-1,  # No button selected by default
+				buttons=time_buttons,
+			),
+		],
+	)
 
 	fig.update_xaxes(
 		gridcolor=grid_color,
