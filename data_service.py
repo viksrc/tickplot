@@ -15,12 +15,36 @@ import pandas as pd
 import polars as pl
 
 
-class DataServiceBase(ABC):
+class DataServiceInterface(ABC):
     """Abstract base class defining the DataService interface.
     
     Subclasses must implement the abstract methods to provide data access.
-    This base class provides generic analytics methods that work with any implementation.
     """
+
+    @abstractmethod
+    def query_orders(self, start_date: str, end_date: str) -> pd.DataFrame:
+        pass
+
+    @abstractmethod
+    def query_sql(self, sql_query: str, current_df: pd.DataFrame | None = None) -> pd.DataFrame:
+        pass
+
+    @abstractmethod
+    def get_order_enriched(self, date: str, orderid: str) -> dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def get_order(self, date: str, orderid: str) -> dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def get_prices(
+        self, date: str, ticker: str,
+        exch_open_time: str, exch_close_time: str
+    ) -> pd.DataFrame:
+        pass
+
+
     
     @abstractmethod
     def get_executions(self, date: str, orderid: str) -> pd.DataFrame:
@@ -498,7 +522,7 @@ def _generate_stock_and_execution_data(
 
 
 @dataclass
-class DataService(DataServiceBase):
+class DataService(DataServiceInterface):
     """Data access layer.
 
     Right now this is backed by a deterministic simulation, but it is structured
