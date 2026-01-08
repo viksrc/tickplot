@@ -5,6 +5,7 @@ pytabulator>=0.2.5
 shiny>=1.5
 shinyswatch>=0.7
 shinywidgets>=0.7
+ipywidgets>=8.0
 faicons
 python-dotenv
 chatlas
