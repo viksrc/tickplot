@@ -522,3 +522,219 @@ def test_range_slider_yaxis_rescaling(page: Page, app: ShinyAppProc):
     changed = abs(new_y[0] - init_y[0]) > 0.001 or abs(new_y[1] - init_y[1]) > 0.001
     verify(changed, "Y-axis range adjusted after zoom")
     verify(new_y[1] - new_y[0] <= (init_y[1] - init_y[0]) * 1.5, "Zoomed y-axis span is reasonable")
+
+@pytest.mark.anyio
+def test_15min_duration_button_from_first(page: Page, app: ShinyAppProc):
+    """Test the 15-minute duration button displays a 15-minute range (e.g., 9:30 to 9:45)."""
+    LOGGER.info("Starting test_15min_duration_button_from_first")
+    page.goto(app.url)
+    
+    # Select the first order
+    orders_table = page.locator("#orders_table")
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row).to_be_visible()
+    first_row.click()
+    page.wait_for_timeout(200)
+    
+    # Navigate to Chart tab
+    page.get_by_text("Chart", exact=True).click()
+    LOGGER.info("  Switched to Chart tab")
+    
+    # Wait for chart to be visible
+    chart = page.locator("#order_chart .js-plotly-plot")
+    expect(chart).to_be_visible(timeout=5000)
+    page.wait_for_timeout(2000)
+    
+    # Get initial default range before clicking any buttons
+    initial_range = page.evaluate('''() => {
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
+        if (!gd || !gd.layout || !gd.layout.xaxis) return null;
+        return gd.layout.xaxis.range || null;
+    }''')
+    LOGGER.info(f"  Initial default range: {initial_range}")
+    
+    # Calculate initial duration
+    if initial_range:
+        init_start_parts = initial_range[0].split("T")[1].split(":")
+        init_end_parts = initial_range[1].split("T")[1].split(":")
+        init_start_mins = int(init_start_parts[0]) * 60 + int(init_start_parts[1])
+        init_end_mins = int(init_end_parts[0]) * 60 + int(init_end_parts[1])
+        init_duration = init_end_mins - init_start_mins
+        LOGGER.info(f"  Initial duration: {init_duration} minutes (from {init_start_parts[0]}:{init_start_parts[1]} to {init_end_parts[0]}:{init_end_parts[1]})")
+        LOGGER.info(f"  This is the default view with padding based on order duration")
+    
+    # Verify the event handler is attached by checking if _hasRescaling flag is set
+    has_rescaling = page.evaluate('''() => {
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
+        return gd && gd._hasRescaling === true;
+    }''')
+    LOGGER.info(f"  Chart has rescaling handler: {has_rescaling}")
+    if not has_rescaling:
+        # Manually trigger the binding if needed
+        page.evaluate('if (typeof resizeAllPlotly === "function") resizeAllPlotly();')
+        page.wait_for_timeout(500)
+    
+    # Click First button, then 15m button
+    button_first = page.locator(".updatemenu-button").filter(has_text="First")
+    expect(button_first).to_be_visible()
+    button_first.click(force=True)
+    page.wait_for_timeout(500)
+    LOGGER.info("  Clicked 'First' anchor button")
+    
+    button_15m = page.locator(".updatemenu-button").filter(has_text="15m")
+    expect(button_15m).to_be_visible()
+    button_15m.click(force=True)
+    page.wait_for_timeout(2000)
+    LOGGER.info("  Clicked '15m' duration button")
+    
+    # Get the x-axis range
+    x_range = page.evaluate('''() => {
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
+        if (!gd || !gd.layout || !gd.layout.xaxis) return null;
+        return gd.layout.xaxis.range || null;
+    }''')
+    
+    verify(x_range is not None and len(x_range) == 2, "X-axis range is defined")
+    LOGGER.info(f"  X-axis range: {x_range}")
+    
+    # Calculate duration
+    start_parts = x_range[0].split("T")[1].split(":")
+    end_parts = x_range[1].split("T")[1].split(":")
+    
+    start_mins = int(start_parts[0]) * 60 + int(start_parts[1])
+    end_mins = int(end_parts[0]) * 60 + int(end_parts[1])
+    duration = end_mins - start_mins
+    
+    LOGGER.info(f"  Duration: {duration} minutes (from {start_parts[0]}:{start_parts[1]} to {end_parts[0]}:{end_parts[1]})")
+    
+    # Verify approximately 15 minutes (allow ±2 minutes for auction bars)
+    verify(abs(duration - 15) <= 2, f"15m button shows ~15 minute duration (got {duration} mins)")
+    
+    # If order starts at 9:30, verify end is around 9:45
+    if start_mins == 9 * 60 + 30:  # 570 minutes = 9:30
+        expected_end = 9 * 60 + 45  # 585 minutes = 9:45
+        verify(abs(end_mins - expected_end) <= 2, f"For 9:30 start, ends at ~9:45 (got {end_parts[0]}:{end_parts[1]})")
+        LOGGER.info(f"  ✅ PASSED: 15m button shows 9:30-9:45 range")
+    else:
+        LOGGER.info(f"  ✅ PASSED: 15m button shows correct 15-minute duration")
+
+
+@pytest.mark.anyio
+def test_all_button_includes_auction_bars(page: Page, app: ShinyAppProc):
+    """Test the 'All' button includes Open and Close auction bars after clicking a duration button.
+    
+    This test reproduces the bug where:
+    1. User clicks a duration button (e.g., 30m) which changes the bin size
+    2. User clicks 'All' to restore full view
+    3. Bug: 'All' uses the wrong bin size offset, leaving out Open/Close bars
+    """
+    LOGGER.info("Starting test_all_button_includes_auction_bars")
+    page.goto(app.url)
+    
+    # Select the first order (should span full day 9:30-16:00)
+    orders_table = page.locator("#orders_table")
+    first_row = orders_table.locator(".tabulator-row").first
+    expect(first_row).to_be_visible()
+    
+    start_time = first_row.locator('.tabulator-cell[tabulator-field="StartTime"]').text_content().strip()
+    end_time = first_row.locator('.tabulator-cell[tabulator-field="EndTime"]').text_content().strip()
+    LOGGER.info(f"  Order times: {start_time} - {end_time}")
+    
+    first_row.click()
+    page.wait_for_timeout(200)
+    
+    # Navigate to Chart tab
+    page.get_by_text("Chart", exact=True).click()
+    LOGGER.info("  Switched to Chart tab")
+    
+    # Wait for chart to be visible
+    chart = page.locator("#order_chart .js-plotly-plot")
+    expect(chart).to_be_visible(timeout=5000)
+    page.wait_for_timeout(2000)
+    
+    # IMPORTANT: The bug manifests when clicking a duration button first, then All.
+    # First click 30m to switch bin size
+    button_30m = page.locator(".updatemenu-button").filter(has_text="30m")
+    expect(button_30m).to_be_visible()
+    button_30m.click(force=True)
+    page.wait_for_timeout(2500)  # Wait for server re-render with new bin size
+    LOGGER.info("  Clicked '30m' duration button first")
+    
+    # Now click the 'All' button
+    button_all = page.locator(".updatemenu-button").filter(has_text="All")
+    expect(button_all).to_be_visible()
+    button_all.click(force=True)
+    page.wait_for_timeout(1500)
+    LOGGER.info("  Clicked 'All' button")
+    
+    # Get both the x-axis range AND the defaultRange from metadata
+    # The All button uses defaultRange, so we need to check that it's correct
+    chart_data = page.evaluate('''() => {
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
+        if (!gd || !gd.layout) return null;
+        return {
+            xAxisRange: gd.layout.xaxis?.range || null,
+            defaultRange: gd.layout.meta?.defaultRange || null,
+            binSize: gd.layout.meta?.binSize || null,
+        };
+    }''')
+    
+    verify(chart_data is not None, "Chart data is available")
+    x_range = chart_data.get("xAxisRange")
+    default_range = chart_data.get("defaultRange")
+    bin_size = chart_data.get("binSize")
+    
+    LOGGER.info(f"  After 'All' click:")
+    LOGGER.info(f"    - Current x-axis range: {x_range}")
+    LOGGER.info(f"    - defaultRange in meta: {default_range}")
+    LOGGER.info(f"    - binSize in meta: {bin_size}")
+    
+    verify(x_range is not None and len(x_range) == 2, "X-axis range is defined")
+    verify(default_range is not None and len(default_range) == 2, "defaultRange is defined in metadata")
+    
+    # Parse time to minutes
+    def parse_time_mins(time_str):
+        parts = time_str.split(":")
+        mins = int(parts[0]) * 60 + int(parts[1])
+        if len(parts) > 2:
+            mins += int(parts[2]) / 60
+        return mins
+    
+    # Check x-axis range (what's displayed)
+    start_time_str = x_range[0].split("T")[1]
+    end_time_str = x_range[1].split("T")[1]
+    range_start_mins = parse_time_mins(start_time_str)
+    range_end_mins = parse_time_mins(end_time_str)
+    
+    # Check defaultRange in metadata (what All button uses)
+    default_start_str = default_range[0].split("T")[1]
+    default_end_str = default_range[1].split("T")[1]
+    default_start_mins = parse_time_mins(default_start_str)
+    default_end_mins = parse_time_mins(default_end_str)
+    
+    LOGGER.info(f"  X-axis range: {start_time_str} ({range_start_mins:.1f} mins) to {end_time_str} ({range_end_mins:.1f} mins)")
+    LOGGER.info(f"  defaultRange: {default_start_str} ({default_start_mins:.1f} mins) to {default_end_str} ({default_end_mins:.1f} mins)")
+    
+    # For a full-day order (9:30-16:00):
+    # - Market open is 9:30 (570 mins)
+    # - Market close is 16:00 (960 mins)
+    # - 'All' should include Open auction bar (before 9:30) and Close auction bar (after 16:00)
+    
+    market_open_mins = 9 * 60 + 30   # 9:30 = 570 mins
+    market_close_mins = 16 * 60      # 16:00 = 960 mins
+    
+    # CRITICAL: Verify the defaultRange in metadata is correct!
+    # This is what the All button reads from, so if this is wrong, All won't work
+    verify(default_start_mins < market_open_mins, 
+           f"defaultRange start ({default_start_str}) must be before market open 9:30 (includes Open auction bar)")
+    verify(default_end_mins > market_close_mins, 
+           f"defaultRange end ({default_end_str}) must be after market close 16:00 (includes Close auction bar)")
+    
+    # Verify the actual displayed x-axis range is also correct
+    verify(range_start_mins < market_open_mins, 
+           f"X-axis start ({start_time_str}) is before market open 9:30 (includes Open auction bar)")
+    verify(range_end_mins > market_close_mins, 
+           f"X-axis end ({end_time_str}) is after market close 16:00 (includes Close auction bar)")
+    
+    LOGGER.info(f"  ✅ PASSED: 'All' button correctly includes Open and Close auction bars")
+

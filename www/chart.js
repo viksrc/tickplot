@@ -28,6 +28,41 @@ function resizeAllPlotly() {
         return new Date(s).getTime();
     }
 
+    // Helper to add minutes to an ISO date string and return the result in the same format
+    // This avoids timezone issues from toISOString() which converts to UTC
+    function _addMinsToIsoString(isoStr, mins) {
+        // Parse the date parts directly from the string (format: YYYY-MM-DDTHH:MM:SS)
+        const match = isoStr.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+        if (!match) return isoStr;
+
+        let [, year, month, day, hour, minute, second] = match.map(Number);
+
+        // Add minutes
+        minute += mins;
+
+        // Handle overflow/underflow
+        while (minute >= 60) {
+            minute -= 60;
+            hour += 1;
+        }
+        while (minute < 0) {
+            minute += 60;
+            hour -= 1;
+        }
+        while (hour >= 24) {
+            hour -= 24;
+            day += 1;
+        }
+        while (hour < 0) {
+            hour += 24;
+            day -= 1;
+        }
+        // Note: Simplified - doesn't handle month/year overflow but works for intraday trading
+
+        const pad = n => String(n).padStart(2, '0');
+        return `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:${pad(second)}`;
+    }
+
     // Helper to calculate bin size for a given range in minutes
     function _getBinSizeForRange(rangeMins) {
         if (rangeMins > 160) return '5min';
@@ -56,12 +91,12 @@ function resizeAllPlotly() {
         const orderKey = graphDiv._currentOrderKey || 'default';
         const storedState = sessionStorage.getItem('chartButtonState_' + orderKey);
         let savedState = storedState ? JSON.parse(storedState) : null;
-        
+
         // anchor: "first" or "last" - determines which end duration applies from
         // selectedDuration: null or number (mins) - the last selected duration
         graphDiv._anchor = savedState?.anchor || "first";
         graphDiv._selectedDuration = savedState?.duration || null;
-        
+
         function _saveButtonState() {
             const state = { anchor: graphDiv._anchor, duration: graphDiv._selectedDuration };
             sessionStorage.setItem('chartButtonState_' + orderKey, JSON.stringify(state));
@@ -71,22 +106,22 @@ function resizeAllPlotly() {
         graphDiv.on('plotly_buttonclicked', function (eventdata) {
             console.log('Button clicked! eventdata:', eventdata);
             if (!eventdata || !eventdata.button || !eventdata.button.args) return;
-            
+
             const args = eventdata.button.args[0];
             console.log('Button args:', args);
             if (!args || !args.action) return;
-            
+
             const meta = graphDiv.layout?.meta || {};
             const durationData = meta.durationData || {};
             const defaultRange = meta.defaultRange || [];
             console.log('meta:', meta, 'durationData:', durationData, 'defaultRange:', defaultRange);
-            
+
             let targetRange = null;
-            
+
             if (args.action === "anchor") {
                 // First or Last button - set anchor
                 graphDiv._anchor = args.anchor;  // "first" or "last"
-                
+
                 // If a duration was previously selected, apply it from new anchor
                 if (graphDiv._selectedDuration) {
                     const durData = durationData[String(graphDiv._selectedDuration)];
@@ -94,67 +129,68 @@ function resizeAllPlotly() {
                         const mins = graphDiv._selectedDuration;
                         if (graphDiv._anchor === "last") {
                             // Apply duration backward from effective end
-                            const endMs = _toEpochMs(durData.effEnd);
-                            const startMs = endMs - (mins * 60000);
-                            targetRange = [new Date(startMs).toISOString().slice(0, 19), durData.effEnd];
+                            targetRange = [_addMinsToIsoString(durData.effEnd, -mins), durData.effEnd];
                         } else {
                             // Apply duration forward from effective start
-                            const startMs = _toEpochMs(durData.effStart);
-                            const endMs = startMs + (mins * 60000);
-                            targetRange = [durData.effStart, new Date(endMs).toISOString().slice(0, 19)];
+                            targetRange = [durData.effStart, _addMinsToIsoString(durData.effStart, mins)];
                         }
                     }
                 }
                 // If no duration selected yet, anchor click does nothing to the view
                 if (!targetRange) return;
-                
+
             } else if (args.action === "duration") {
                 // Duration button - apply duration from current anchor
                 const mins = args.mins;
                 graphDiv._selectedDuration = mins;  // remember selected duration
-                
+
                 const durData = durationData[String(mins)];
                 console.log('Duration button clicked:', mins, 'durData:', durData, 'anchor:', graphDiv._anchor);
                 if (!durData) {
                     console.error('No durData found for', mins, 'durationData:', durationData);
                     return;
                 }
-                
+
                 if (graphDiv._anchor === "last") {
                     // Apply duration backward from effective end
-                    const endMs = _toEpochMs(durData.effEnd);
-                    const startMs = endMs - (mins * 60000);
-                    targetRange = [new Date(startMs).toISOString().slice(0, 19), durData.effEnd];
+                    targetRange = [_addMinsToIsoString(durData.effEnd, -mins), durData.effEnd];
                 } else {
                     // Apply duration forward from effective start  
-                    const startMs = _toEpochMs(durData.effStart);
-                    const endMs = startMs + (mins * 60000);
-                    targetRange = [durData.effStart, new Date(endMs).toISOString().slice(0, 19)];
+                    targetRange = [durData.effStart, _addMinsToIsoString(durData.effStart, mins)];
                 }
                 console.log('Calculated targetRange:', targetRange);
-                
+
             } else if (args.action === "all") {
                 // All button - restore to initial view (same as order load)
                 targetRange = defaultRange;
                 graphDiv._anchor = "first";  // reset anchor
                 graphDiv._selectedDuration = null;  // clear duration selection
             }
-            
+
             // Save state for persistence across re-renders
             _saveButtonState();
-            
+
             if (!targetRange || targetRange.length !== 2) return;
 
             const tStart = _toEpochMs(targetRange[0]);
             const tEnd = _toEpochMs(targetRange[1]);
             const rangeMins = (tEnd - tStart) / 60000;
-            
+
             const newBinSize = _getBinSizeForRange(rangeMins);
             const currentBinSize = graphDiv._lastBinSize || graphDiv.layout?.meta?.binSize || '5min';
-            
+
+            console.log('Bin size check:', {
+                targetRange,
+                rangeMins,
+                newBinSize,
+                currentBinSize,
+                willRerender: newBinSize !== currentBinSize
+            });
+
             if (newBinSize !== currentBinSize) {
                 // Bin size changes: send to server, let server render with correct bins
                 // Don't do local relayout - it would show wrong bins
+                console.log('-> Sending to server (bin size changed)');
                 if (window.Shiny) {
                     const orderKey = graphDiv._currentOrderKey || null;
                     graphDiv._lastBinSize = newBinSize;
@@ -167,8 +203,9 @@ function resizeAllPlotly() {
                 }
             } else {
                 // Same bin size: do local relayout (fast, no server trip)
+                console.log('-> Local relayout (same bin size)');
                 if (window.Plotly) {
-                    Plotly.relayout(graphDiv, {'xaxis.range': targetRange});
+                    Plotly.relayout(graphDiv, { 'xaxis.range': targetRange });
                 }
             }
         });

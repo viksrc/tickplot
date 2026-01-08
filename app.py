@@ -19,7 +19,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 
 from data_service import DataService
-from plotly_order_viz import create_order_viz
+import plotly_order_viz
 import tables
 from nl_service import NLService
 from databot_service import DatabotService
@@ -287,12 +287,11 @@ def server(input, output, session):
             except (ValueError, AttributeError, IndexError):
                 range_mins = 999
 
-        if range_mins > 160: res = "5min"
-        elif range_mins > 80: res = "2min"
-        elif range_mins >= 40: res = "1min"
-        else: res = "30s"
-        
+        # Use shared policy from plotly_order_viz
+        res, _ = plotly_order_viz.get_bin_policy(range_mins)
         return res
+        
+
 
     @reactive.calc
     def current_order_enriched():
@@ -517,57 +516,12 @@ def server(input, output, session):
         with reactive.isolate():
             state = input.chart_state() if "chart_state" in input else None
 
-        # Calculate initial view range based on order duration
-        st_parts = str(start_time_str).split(":")
-        et_parts = str(end_time_str).split(":")
-        st_minutes = int(st_parts[0]) * 60 + int(st_parts[1])
-        et_minutes = int(et_parts[0]) * 60 + int(et_parts[1])
-        duration = et_minutes - st_minutes
-
-        # Determine padding based on duration
-        if duration > 120:
-            padding_mins = 30
-        elif duration > 20:
-            padding_mins = 10
-        else:
-            padding_mins = 5
-
-        # Parse exchange hours for dynamic limits
-        exch_open_time = str(order_detail["ExchOpenTime"])
-        exch_close_time = str(order_detail["ExchCloseTime"])
-        eo_parts = exch_open_time.split(":")
-        ec_parts = exch_close_time.split(":")
-        exch_open_mins = int(eo_parts[0]) * 60 + int(eo_parts[1])
-        exch_close_mins = int(ec_parts[0]) * 60 + int(ec_parts[1])
-
-        # Convert bin_size to seconds for precision
-        bin_seconds = {"5min": 300, "2min": 120, "1min": 60, "30s": 30}.get(bin_size, 300)
-        
-        # Open auction bar range: exch_open - bin_size to exch_open
-        exch_open_secs = exch_open_mins * 60
-        min_left_secs = exch_open_secs - bin_seconds
-        
-        calculated_start_secs = (st_minutes - padding_mins) * 60
-        view_start_secs = max(min_left_secs, calculated_start_secs)
-        
-        # Dynamic upper bound: Exch Close + bin_size
-        exch_close_secs = exch_close_mins * 60
-        max_view_secs = exch_close_secs + bin_seconds
-        calculated_end_secs = (et_minutes + padding_mins) * 60
-        
-        # Cap the view end at exchange close + bin_size to avoid extending too far
-        view_end_secs = min(calculated_end_secs, max_view_secs)
-
-        view_start_h, view_start_rem = divmod(view_start_secs, 3600)
-        view_start_m, view_start_s = divmod(view_start_rem, 60)
-        
-        view_end_h, view_end_rem = divmod(view_end_secs, 3600)
-        view_end_m, view_end_s = divmod(view_end_rem, 60)
-        
-        default_x_range = [
-            f"{date}T{view_start_h:02d}:{view_start_m:02d}:{view_start_s:02d}",
-            f"{date}T{view_end_h:02d}:{view_end_m:02d}:{view_end_s:02d}",
-        ]
+        # Calculate initial view range based on order duration using the new helper
+        # This replaces the entire manual calculation block including auction bar math
+        start_iso, end_iso, _ = plotly_order_viz.calculate_default_range(
+            date, start_time_str, end_time_str, exch_open_time, exch_close_time
+        )
+        default_x_range = [start_iso, end_iso]
 
         # PERFORMANCE FIX: Isolate the state access so we don't re-render the WHOLE chart
         # for every single pixel of zoom/pan. We only want to re-render if the 
@@ -609,7 +563,7 @@ def server(input, output, session):
             "danger": shiny_theme.colors.danger,
         }
 
-        return create_order_viz(
+        return plotly_order_viz.create_order_viz(
             data_service=DATA_SERVICE,
             date=date,
             ticker=str(ticker),

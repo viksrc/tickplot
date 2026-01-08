@@ -14,6 +14,74 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
+def get_bin_policy(duration_mins: float) -> tuple[str, int]:
+	"""Return (bin_size_str, bin_seconds) for a given duration in minutes."""
+	if duration_mins > 160:
+		return "5min", 300
+	elif duration_mins > 80:
+		return "2min", 120
+	elif duration_mins >= 40:
+		return "1min", 60
+	else:
+		return "30s", 30
+
+
+def calculate_default_range(
+	date: str,
+	start_time_str: str,
+	end_time_str: str,
+	exch_open_str: str,
+	exch_close_str: str,
+) -> tuple[str, str, str]:
+	"""Calculate the default view range and initial bin size using pandas.
+	
+	Returns: (start_iso, end_iso, bin_size_str)
+	"""
+	# Parse times
+	start_dt = pd.to_datetime(f"{date} {start_time_str}")
+	end_dt = pd.to_datetime(f"{date} {end_time_str}")
+	exch_open_dt = pd.to_datetime(f"{date} {exch_open_str}")
+	exch_close_dt = pd.to_datetime(f"{date} {exch_close_str}")
+	
+	duration_mins = (end_dt - start_dt).total_seconds() / 60
+	bin_size_str, bin_seconds = get_bin_policy(duration_mins)
+	
+	# Determine strict padding based on duration (from app.py logic)
+	if duration_mins > 120:
+		padding_mins = 30
+	elif duration_mins > 20:
+		padding_mins = 10
+	else:
+		padding_mins = 5
+		
+	# Apply padding
+	view_start = start_dt - pd.Timedelta(minutes=padding_mins)
+	view_end = end_dt + pd.Timedelta(minutes=padding_mins)
+	
+	# Apply auction bar limits (Open - bin_size, Close + bin_size)
+	# The view should not go beyond these limits, but MUST reach them if the order does
+	
+	# Lower bound: max(Open - bin_size, view_start)
+	# BUT if order starts at Open, we typically want to see the auction bar.
+	# The app.py logic was: min_left = exch_open - bin_size.
+	# view_start = max(min_left, calced_start).
+	
+	bin_delta = pd.Timedelta(seconds=bin_seconds)
+	min_view_start = exch_open_dt - bin_delta
+	max_view_end = exch_close_dt + bin_delta
+	
+	# Ensure we don't show data before the "auction bar start" logic
+	if view_start < min_view_start:
+		view_start = min_view_start
+		
+	# Ensure we don't show data after "auction bar end" logic
+	if view_end > max_view_end:
+		view_end = max_view_end
+		
+	# Formatting to ISO string
+	return view_start.strftime("%Y-%m-%dT%H:%M:%S"), view_end.strftime("%Y-%m-%dT%H:%M:%S"), bin_size_str
+
+
 def create_order_viz(
 	*,
 	data_service: Any,
@@ -550,26 +618,17 @@ def create_order_viz(
 	starts_at_open = (start_dt == exch_open_dt)
 	ends_at_close = (end_dt == exch_close_dt)
 	
-	# Helper function to determine bin size based on duration (same logic as dynamic binning)
-	def get_bin_minutes_for_duration(duration_mins):
-		if duration_mins > 160:
-			return 5  # 5min bins
-		elif duration_mins > 80:
-			return 2  # 2min bins
-		elif duration_mins > 40:
-			return 1  # 1min bins
-		else:
-			return 0.5  # 30s bins
 	
 	# Helper to calculate effective start/end for a given duration
 	def get_effective_range(duration_mins):
-		bin_mins = get_bin_minutes_for_duration(duration_mins)
+		# Reuse shared policy
+		_, bin_secs = get_bin_policy(duration_mins)
 		
 		# Effective start: if order starts at market open, include Open auction bar (mkt_open - bin_size)
-		eff_start_dt = exch_open_dt - pd.Timedelta(minutes=bin_mins) if starts_at_open else start_dt
+		eff_start_dt = exch_open_dt - pd.Timedelta(seconds=bin_secs) if starts_at_open else start_dt
 		
 		# Effective end: if order ends at market close, include Close auction bar (mkt_close + bin_size)
-		eff_end_dt = exch_close_dt + pd.Timedelta(minutes=bin_mins) if ends_at_close else end_dt
+		eff_end_dt = exch_close_dt + pd.Timedelta(seconds=bin_secs) if ends_at_close else end_dt
 		
 		return eff_start_dt, eff_end_dt
 	
