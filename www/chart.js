@@ -72,143 +72,125 @@ function resizeAllPlotly() {
     }
 
     function _bindRescaling(graphDiv) {
-        if (!graphDiv || graphDiv._hasRescaling) return;
-        if (typeof graphDiv.on !== 'function') return; // Plotly hasn't enhanced it yet.
+        if (!graphDiv || typeof graphDiv.on !== 'function') return; // Plotly hasn't enhanced it yet.
 
-        graphDiv._hasRescaling = true;
-
-        // Read order key from Plotly layout metadata and store on graphDiv
-        // This is used to track which order the saved range belongs to
-        if (graphDiv.layout && graphDiv.layout.meta && graphDiv.layout.meta.orderKey) {
-            graphDiv._currentOrderKey = graphDiv.layout.meta.orderKey;
+        // Always update order key from metadata (order can change without rebind)
+        const newOrderKey = graphDiv.layout?.meta?.orderKey;
+        if (newOrderKey && newOrderKey !== graphDiv._currentOrderKey) {
+            graphDiv._currentOrderKey = newOrderKey;
+            // Reset button state for new order
+            const storedState = sessionStorage.getItem('chartButtonState_' + newOrderKey);
+            const savedState = storedState ? JSON.parse(storedState) : null;
+            graphDiv._anchor = savedState?.anchor || "first";
+            graphDiv._selectedDuration = savedState?.duration || null;
         }
+
+        // Only bind event handlers once
+        if (graphDiv._hasRescaling) return;
+        graphDiv._hasRescaling = true;
 
         // Ensure Plotly fits the container on first bind
         setTimeout(() => _safePlotlyResize(graphDiv), 50);
 
-        // Anchor-based button system state - persist across re-renders using sessionStorage
-        // Use orderKey to namespace the state so different orders don't conflict
-        const orderKey = graphDiv._currentOrderKey || 'default';
-        const storedState = sessionStorage.getItem('chartButtonState_' + orderKey);
-        let savedState = storedState ? JSON.parse(storedState) : null;
+        // Helper for slider/zoom Y-axis rescaling (NOT used for buttons - server handles those)
+        function _rescaleYAxisToEpochRange(graphDiv, tStart, tEnd) {
+            const traces = graphDiv.data;
+            if (!traces || traces.length < 2) return;
 
-        // anchor: "first" or "last" - determines which end duration applies from
-        // selectedDuration: null or number (mins) - the last selected duration
-        graphDiv._anchor = savedState?.anchor || "first";
-        graphDiv._selectedDuration = savedState?.duration || null;
+            const times = traces[0].x;
+            const bids = traces[0].y;
+            const asks = traces[1].y;
+            if (!times || !bids || !asks) return;
+
+            let minP = Infinity;
+            let maxP = -Infinity;
+            let hasData = false;
+
+            for (let i = 0; i < times.length; i++) {
+                const t = _toEpochMs(times[i]);
+                if (t >= tStart && t <= tEnd) {
+                    if (bids[i] < minP) minP = bids[i];
+                    if (asks[i] > maxP) maxP = asks[i];
+                    hasData = true;
+                }
+            }
+
+            // Include executions (if present)
+            if (traces.length > 2 && traces[2].y && traces[2].x) {
+                const execTimes = traces[2].x;
+                const execPrices = traces[2].y;
+                for (let i = 0; i < execTimes.length; i++) {
+                    const t = _toEpochMs(execTimes[i]);
+                    if (t >= tStart && t <= tEnd) {
+                        if (execPrices[i] < minP) minP = execPrices[i];
+                        if (execPrices[i] > maxP) maxP = execPrices[i];
+                    }
+                }
+            }
+
+            if (hasData && window.Plotly && Plotly.relayout) {
+                const range = maxP - minP;
+                const padding = Math.max(range * 0.10, 0.25);
+                try {
+                    Plotly.relayout(graphDiv, { 'yaxis.range': [minP - padding, maxP + padding] });
+                } catch (e) {
+                    // noop
+                }
+            }
+        }
+
+        // Helper to get current order key (may change without rebind)
+        function _getOrderKey() {
+            return graphDiv._currentOrderKey || 'default';
+        }
 
         function _saveButtonState() {
+            const orderKey = _getOrderKey();
             const state = { anchor: graphDiv._anchor, duration: graphDiv._selectedDuration };
             sessionStorage.setItem('chartButtonState_' + orderKey, JSON.stringify(state));
         }
 
         // Handle button clicks - buttons use method="skip" so we control the behavior
+        // ALL button actions are handled server-side to ensure atomic updates of:
+        // - bin size (if changed)
+        // - x-axis range
+        // - y-axis range (computed for the new x-range)
         graphDiv.on('plotly_buttonclicked', function (eventdata) {
-            console.log('Button clicked! eventdata:', eventdata);
             if (!eventdata || !eventdata.button || !eventdata.button.args) return;
 
             const args = eventdata.button.args[0];
-            console.log('Button args:', args);
             if (!args || !args.action) return;
 
-            const meta = graphDiv.layout?.meta || {};
-            const durationData = meta.durationData || {};
-            const defaultRange = meta.defaultRange || [];
-            console.log('meta:', meta, 'durationData:', durationData, 'defaultRange:', defaultRange);
-
-            let targetRange = null;
-
+            // Update local anchor/duration state for UI consistency
             if (args.action === "anchor") {
-                // First or Last button - set anchor
-                graphDiv._anchor = args.anchor;  // "first" or "last"
-
-                // If a duration was previously selected, apply it from new anchor
-                if (graphDiv._selectedDuration) {
-                    const durData = durationData[String(graphDiv._selectedDuration)];
-                    if (durData) {
-                        const mins = graphDiv._selectedDuration;
-                        if (graphDiv._anchor === "last") {
-                            // Apply duration backward from effective end
-                            targetRange = [_addMinsToIsoString(durData.effEnd, -mins), durData.effEnd];
-                        } else {
-                            // Apply duration forward from effective start
-                            targetRange = [durData.effStart, _addMinsToIsoString(durData.effStart, mins)];
-                        }
-                    }
-                }
-                // If no duration selected yet, anchor click does nothing to the view
-                if (!targetRange) return;
-
+                graphDiv._anchor = args.anchor;
             } else if (args.action === "duration") {
-                // Duration button - apply duration from current anchor
-                const mins = args.mins;
-                graphDiv._selectedDuration = mins;  // remember selected duration
-
-                const durData = durationData[String(mins)];
-                console.log('Duration button clicked:', mins, 'durData:', durData, 'anchor:', graphDiv._anchor);
-                if (!durData) {
-                    console.error('No durData found for', mins, 'durationData:', durationData);
-                    return;
-                }
-
-                if (graphDiv._anchor === "last") {
-                    // Apply duration backward from effective end
-                    targetRange = [_addMinsToIsoString(durData.effEnd, -mins), durData.effEnd];
-                } else {
-                    // Apply duration forward from effective start  
-                    targetRange = [durData.effStart, _addMinsToIsoString(durData.effStart, mins)];
-                }
-                console.log('Calculated targetRange:', targetRange);
-
+                graphDiv._selectedDuration = args.mins;
             } else if (args.action === "all") {
-                // All button - restore to initial view (same as order load)
-                targetRange = defaultRange;
-                graphDiv._anchor = "first";  // reset anchor
-                graphDiv._selectedDuration = null;  // clear duration selection
+                graphDiv._anchor = "first";
+                graphDiv._selectedDuration = null;
             }
 
             // Save state for persistence across re-renders
             _saveButtonState();
 
-            if (!targetRange || targetRange.length !== 2) return;
-
-            const tStart = _toEpochMs(targetRange[0]);
-            const tEnd = _toEpochMs(targetRange[1]);
-            const rangeMins = (tEnd - tStart) / 60000;
-
-            const newBinSize = _getBinSizeForRange(rangeMins);
-            const currentBinSize = graphDiv._lastBinSize || graphDiv.layout?.meta?.binSize || '5min';
-
-            console.log('Bin size check:', {
-                targetRange,
-                rangeMins,
-                newBinSize,
-                currentBinSize,
-                willRerender: newBinSize !== currentBinSize
-            });
-
-            if (newBinSize !== currentBinSize) {
-                // Bin size changes: send to server, let server render with correct bins
-                // Don't do local relayout - it would show wrong bins
-                console.log('-> Sending to server (bin size changed)');
-                if (window.Shiny) {
-                    const orderKey = graphDiv._currentOrderKey || null;
-                    graphDiv._lastBinSize = newBinSize;
-                    Shiny.setInputValue('chart_state', {
-                        rangeMins: rangeMins,
-                        xRange: targetRange,
-                        orderKey: orderKey,
-                        timestamp: Date.now()
-                    });
-                }
-            } else {
-                // Same bin size: do local relayout (fast, no server trip)
-                console.log('-> Local relayout (same bin size)');
-                if (window.Plotly) {
-                    Plotly.relayout(graphDiv, { 'xaxis.range': targetRange });
-                }
+            // Send button action to server - server will compute range and update chart atomically
+            if (window.Shiny) {
+                const orderKey = graphDiv._currentOrderKey || null;
+                Shiny.setInputValue('chart_button', {
+                    action: args.action,
+                    anchor: graphDiv._anchor,
+                    duration: graphDiv._selectedDuration,
+                    mins: args.mins || null,
+                    orderKey: orderKey,
+                    timestamp: Date.now()
+                });
             }
         });
+
+        // NOTE: plotly_afterplot is no longer needed for button-driven updates.
+        // Server now handles all button actions atomically (bin change + x-range + y-range).
+        // The plotly_relayout handler below still handles slider/zoom interactions.
 
         graphDiv.on('plotly_relayout', function (eventdata) {
             // Detect changes on MAIN axis (xaxis) or SLIDER axis (xaxis3).
@@ -321,41 +303,8 @@ function resizeAllPlotly() {
                 // Sending chart_state for every pan/zoom causes unnecessary server re-renders
             }
 
-            // Dynamic y-axis rescale (include executions)
-            let minP = Infinity;
-            let maxP = -Infinity;
-            let hasData = false;
-
-            for (let i = 0; i < times.length; i++) {
-                const t = _toEpochMs(times[i]);
-                if (t >= tStart && t <= tEnd) {
-                    if (bids[i] < minP) minP = bids[i];
-                    if (asks[i] > maxP) maxP = asks[i];
-                    hasData = true;
-                }
-            }
-
-            if (traces.length > 2 && traces[2].y && traces[2].x) {
-                const execTimes = traces[2].x;
-                const execPrices = traces[2].y;
-                for (let i = 0; i < execTimes.length; i++) {
-                    const t = _toEpochMs(execTimes[i]);
-                    if (t >= tStart && t <= tEnd) {
-                        if (execPrices[i] < minP) minP = execPrices[i];
-                        if (execPrices[i] > maxP) maxP = execPrices[i];
-                    }
-                }
-            }
-
-            if (hasData && window.Plotly && Plotly.relayout) {
-                const range = maxP - minP;
-                const padding = Math.max(range * 0.10, 0.25);
-                try {
-                    Plotly.relayout(graphDiv, { 'yaxis.range': [minP - padding, maxP + padding] });
-                } catch (e) {
-                    // noop
-                }
-            }
+                // Dynamic y-axis rescale (include executions)
+                _rescaleYAxisToEpochRange(graphDiv, tStart, tEnd);
         });
     }
 

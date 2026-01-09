@@ -112,10 +112,10 @@ def create_order_viz(
 	- exch_open_time, exch_close_time: exchange trading hours (HH:MM)
 	"""
 
-	primary = str(theme_colors.get("primary", "#0d6efd"))
-	body_color = str(theme_colors.get("body_color", "#212529"))
-	warning = str(theme_colors.get("warning", "#ffc107"))
-	danger = str(theme_colors.get("danger", "#dc3545"))
+	primary = theme_colors.get("primary", "#0d6efd")
+	body_color = theme_colors.get("body_color", "#212529")
+	warning = theme_colors.get("warning", "#ffc107")
+	danger = theme_colors.get("danger", "#dc3545")
 
 	if is_dark:
 		font_color = "#c9d1d9"
@@ -123,7 +123,7 @@ def create_order_viz(
 		volume_color = "rgba(92, 124, 250, 0.95)"
 
 		def _hex_to_rgb(h: str) -> tuple[int, int, int]:
-			h = str(h).lstrip("#")
+			h = h.lstrip("#")
 			if len(h) == 3:
 				h = "".join([c + c for c in h])
 			return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))

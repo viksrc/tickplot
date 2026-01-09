@@ -481,6 +481,84 @@ def test_stock_chart_existence(page: Page, app: ShinyAppProc):
     verify(actual_start == expected_start, f"Start marker time {actual_start} matches order start {expected_start}")
     verify(actual_end == expected_end, f"End marker time {actual_end} matches order end {expected_end}")
 
+    # Helper to get Y-axis scaling data
+    def get_yaxis_data():
+        return page.evaluate('''() => {
+            const gd = document.querySelector("#order_chart .js-plotly-plot");
+            if (!gd || !gd.data || !gd.layout) return null;
+            
+            const yRange = gd.layout.yaxis?.range;
+            if (!yRange || yRange.length !== 2) return null;
+            
+            const xRange = gd.layout.xaxis?.range;
+            if (!xRange || xRange.length !== 2) return null;
+            
+            const bidTrace = gd.data.find(t => t.name === 'Bid');
+            const askTrace = gd.data.find(t => t.name === 'Ask');
+            if (!bidTrace || !askTrace || !bidTrace.y || !askTrace.y || !bidTrace.x) return null;
+            
+            const toEpoch = (v) => {
+                if (typeof v === 'number') return v;
+                return new Date(String(v).replace(' ', 'T')).getTime();
+            };
+            
+            const xStart = toEpoch(xRange[0]);
+            const xEnd = toEpoch(xRange[1]);
+            
+            let visibleMin = Infinity;
+            let visibleMax = -Infinity;
+            let hasVisibleData = false;
+            
+            for (let i = 0; i < bidTrace.x.length; i++) {
+                const t = toEpoch(bidTrace.x[i]);
+                if (t >= xStart && t <= xEnd) {
+                    if (bidTrace.y[i] != null && !isNaN(bidTrace.y[i])) {
+                        visibleMin = Math.min(visibleMin, bidTrace.y[i]);
+                        hasVisibleData = true;
+                    }
+                    if (askTrace.y[i] != null && !isNaN(askTrace.y[i])) {
+                        visibleMax = Math.max(visibleMax, askTrace.y[i]);
+                        hasVisibleData = true;
+                    }
+                }
+            }
+            
+            if (!hasVisibleData) return null;
+            
+            const visibleSpan = visibleMax - visibleMin;
+            const ySpan = yRange[1] - yRange[0];
+            const pad = Math.max(visibleSpan * 0.10, 0.25);
+            const expectedSpan = visibleSpan + 2 * pad;
+            
+            return {
+                yRange: yRange,
+                xRange: xRange,
+                visibleMin: visibleMin,
+                visibleMax: visibleMax,
+                visibleSpan: visibleSpan,
+                ySpan: ySpan,
+                expectedSpan: expectedSpan
+            };
+        }''')
+    
+    def verify_yaxis_scaling(yaxis_data, context_msg):
+        verify(yaxis_data is not None, f"Y-axis data retrieved {context_msg}")
+        LOGGER.info(f"Y-axis {context_msg}: range={yaxis_data['yRange']}, visibleSpan={yaxis_data['visibleSpan']:.2f}, ySpan={yaxis_data['ySpan']:.2f}, expectedSpan={yaxis_data['expectedSpan']:.2f}")
+        
+        if yaxis_data['visibleSpan'] > 0.5:
+            ratio = yaxis_data['ySpan'] / yaxis_data['expectedSpan']
+            verify(
+                0.8 <= ratio <= 1.5,
+                f"Y-axis properly scaled {context_msg} (ySpan={yaxis_data['ySpan']:.2f}, expected={yaxis_data['expectedSpan']:.2f}, ratio={ratio:.2f})"
+            )
+    
+    # Verify initial Y-axis scaling
+    verify_yaxis_scaling(get_yaxis_data(), "at initial load")
+    
+    # Wait 2 seconds and check again - catches regressions where correct scaling gets overwritten
+    page.wait_for_timeout(2000)
+    verify_yaxis_scaling(get_yaxis_data(), "after 2s")
+
 @pytest.mark.anyio
 def test_volume_chart_open_label(page: Page, app: ShinyAppProc):
     """Test specifically for the Open bar hover label."""
@@ -864,6 +942,92 @@ def test_range_slider_yaxis_rescaling(page: Page, app: ShinyAppProc):
     verify(new_y is not None, f"Y-axis range defined after zoom (dbg={dbg})")
     verify(changed, f"Y-axis range adjusted after zoom (dbg={dbg})")
     verify(new_y[1] - new_y[0] <= (init_y[1] - init_y[0]) * 1.5, "Zoomed y-axis span is reasonable")
+
+
+@pytest.mark.anyio
+def test_duration_button_server_update_yaxis_rescaling(page: Page, app: ShinyAppProc):
+    """Regression: duration buttons that trigger server re-render (bin-size change) must still rescale y-axis.
+
+    Historically, buttons relied on plotly_relayout-driven y-rescale. If a button causes a bin-size change,
+    chart.js skips local Plotly.relayout and sends chart_state to the server, so y-axis must be rescaled
+    after the server re-render completes.
+    """
+    LOGGER.info("Starting test_duration_button_server_update_yaxis_rescaling")
+    page.goto(app.url)
+    page.locator("#query_btn").click()
+    page.locator("#orders_table .tabulator-row").first.click()
+    page.get_by_text("Chart", exact=True).click()
+    expect(page.locator("#order_chart .js-plotly-plot"), "Plotly chart is visible").to_be_visible()
+
+    # Wait for chart.js to bind plotly_relayout handler.
+    page.wait_for_function(
+        """() => {
+            const gd = document.querySelector('#order_chart .js-plotly-plot');
+            return !!gd && gd._hasRescaling === true;
+        }""",
+        timeout=5000,
+    )
+
+    init_y = page.evaluate(
+        """() => document.querySelector('#order_chart .js-plotly-plot')?.layout?.yaxis?.range"""
+    )
+    verify(init_y is not None, "Initial y-axis range defined")
+
+    # Simulate a duration button that causes a bin-size change by sending chart_state to server.
+    # Also set sessionStorage so chart.js can apply y-rescale post re-render.
+    target_range = ["2025-01-01T11:00:00", "2025-01-01T11:30:00"]
+    page.evaluate(
+        """(range) => {
+            const gd = document.querySelector('#order_chart .js-plotly-plot');
+            const orderKey = gd?.layout?.meta?.orderKey || 'default';
+            try {
+                sessionStorage.setItem('chartLastTargetRange_' + orderKey, JSON.stringify(range));
+            } catch (e) {
+                // noop
+            }
+            if (window.Shiny) {
+                Shiny.setInputValue('chart_state', {
+                    rangeMins: 30,
+                    xRange: range,
+                    orderKey: orderKey,
+                    timestamp: Date.now()
+                });
+            }
+            return true;
+        }""",
+        target_range,
+    )
+
+    # Wait for y-axis range to change meaningfully from init_y.
+    page.wait_for_function(
+        f"""() => {{
+            const gd = document.querySelector('#order_chart .js-plotly-plot');
+            const new_y = gd?.layout?.yaxis?.range;
+            if (!new_y) return false;
+            const init_y0 = {init_y[0]};
+            const init_y1 = {init_y[1]};
+            return (Math.abs(new_y[0] - init_y0) > 0.001 || Math.abs(new_y[1] - init_y1) > 0.001);
+        }}""",
+        timeout=8000,
+    )
+
+    new_y = page.evaluate(
+        """() => document.querySelector('#order_chart .js-plotly-plot')?.layout?.yaxis?.range"""
+    )
+    dbg = page.evaluate(
+        """() => {
+            const gd = document.querySelector('#order_chart .js-plotly-plot');
+            return {
+                orderKey: gd?.layout?.meta?.orderKey ?? null,
+                binSize: gd?.layout?.meta?.binSize ?? null,
+                xaxis: gd?.layout?.xaxis?.range ?? null,
+                xaxis3: gd?.layout?.xaxis3?.range ?? null,
+                yaxis: gd?.layout?.yaxis?.range ?? null,
+            };
+        }"""
+    )
+    verify(new_y is not None, f"Y-axis range defined after server update (dbg={dbg})")
+    verify(new_y[0] < new_y[1], f"Y-axis range valid after server update (dbg={dbg})")
 
 @pytest.mark.anyio
 def test_volume_split_and_tooltip(page: Page, app: ShinyAppProc):

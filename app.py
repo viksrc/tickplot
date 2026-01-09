@@ -13,18 +13,26 @@ from pytabulator import (
     render_tabulator,
 )
 from shiny import App, render, ui, reactive
-from shinywidgets import output_widget, render_widget
+from shinywidgets import output_widget, render_widget, render_plotly
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 
 from data_service import DataService
-import plotly_order_viz
+from plotly_order_viz import create_order_viz
 import tables
 from nl_service import NLService
 from databot_service import DatabotService
 import dotenv
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 dotenv.load_dotenv()
 
@@ -160,8 +168,47 @@ def server(input, output, session):
     # Print session ID for manual API testing
     print(f"\n--- User connected. Session ID: {session.id} ---\n")
     
+    # Session-level cache for volume data to speed up bin size changes
+    # Key: (date, ticker, bin_size) → Value: DataFrame
+    volume_data_cache = {}
+    
+    # Create a caching wrapper for the data service
+    class CachedDataService:
+        """Wrapper around DATA_SERVICE that caches volume data."""
+        
+        def get_volume_data(self, date, ticker, exch_open_time, exch_close_time, interval):
+            """Get volume data with caching to speed up bin size changes."""
+            cache_key = (date, ticker, interval)
+            
+            if cache_key in volume_data_cache:
+                logger.info(f"📦 Volume cache HIT: {ticker} {date} {interval}")
+                return volume_data_cache[cache_key]
+            
+            logger.info(f"⏳ Volume cache MISS: {ticker} {date} {interval} - fetching...")
+            import time
+            fetch_start = time.time()
+            
+            volume_data = DATA_SERVICE.get_volume_data(
+                date, ticker, exch_open_time, exch_close_time, interval=interval
+            )
+            
+            fetch_elapsed = (time.time() - fetch_start) * 1000
+            logger.info(f"✅ Volume data fetched in {fetch_elapsed:.1f}ms, caching for future use")
+            
+            volume_data_cache[cache_key] = volume_data
+            return volume_data
+        
+        def __getattr__(self, name):
+            """Pass through all other methods to the underlying DATA_SERVICE."""
+            return getattr(DATA_SERVICE, name)
+    
+    cached_data_service = CachedDataService()
+    
     # Store the user's zoom range when switching bins (non-reactive for tracking)
     _last_bin_size = {"value": "5min"}
+    
+    # Track last chart state to detect when only bin_size changed (for efficient updates)
+    _last_chart_state = {"order_key": None, "is_dark": None, "bin_size": None}
     
     # Reactive values: base data from date query, and SQL filter to apply
     base_orders_df = reactive.Value(pd.DataFrame())
@@ -287,11 +334,268 @@ def server(input, output, session):
             except (ValueError, AttributeError, IndexError):
                 range_mins = 999
 
-        # Use shared policy from plotly_order_viz
-        res, _ = plotly_order_viz.get_bin_policy(range_mins)
-        return res
+        if range_mins > 160: res = "5min"
+        elif range_mins > 80: res = "2min"
+        elif range_mins >= 40: res = "1min"
+        else: res = "30s"
         
+        return res
 
+    @reactive.effect
+    def _handle_chart_button():
+        """Handle button clicks from chart.js - compute range server-side and update atomically."""
+        if "chart_button" not in input:
+            return
+        
+        btn = input.chart_button()
+        if not btn or not isinstance(btn, dict):
+            return
+        
+        action = btn.get("action")
+        if not action:
+            return
+        
+        logger.info(f"[chart_button] Received button action: {action}, btn={btn}")
+        
+        # Get current order data
+        data = current_order_enriched()
+        if not data:
+            logger.warning("[chart_button] No order data available")
+            return
+        
+        widget = order_chart.widget
+        if widget is None:
+            logger.warning("[chart_button] Widget is None")
+            return
+        
+        order_detail = data["order"]
+        date = order_detail.get("Date", "").replace(".", "-")
+        orderid = order_detail.get("orderid", "")
+        ticker = order_detail["Ticker"]
+        start_time_str = order_detail["StartTime"]
+        end_time_str = order_detail["EndTime"]
+        exch_open_time = order_detail["ExchOpenTime"]
+        exch_close_time = order_detail["ExchCloseTime"]
+        
+        current_order_key = f"{date}:{orderid}"
+        btn_order_key = btn.get("orderKey")
+        
+        # Verify button is for current order
+        if btn_order_key != current_order_key:
+            logger.info(f"[chart_button] Order key mismatch: {btn_order_key} vs {current_order_key}")
+            return
+        
+        # Parse times to minutes
+        def parse_time_mins(t_str):
+            parts = t_str.split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+        
+        st_mins = parse_time_mins(start_time_str)
+        et_mins = parse_time_mins(end_time_str)
+        eo_mins = parse_time_mins(exch_open_time)
+        ec_mins = parse_time_mins(exch_close_time)
+        
+        # Get current bin size from widget metadata
+        current_bin_size = widget.layout.meta.get("binSize", "5min") if widget.layout.meta else "5min"
+        bin_seconds = {"5min": 300, "2min": 120, "1min": 60, "30s": 30}.get(current_bin_size, 300)
+        
+        # Calculate default range (for "all" action)
+        duration = et_mins - st_mins
+        padding_mins = 30 if duration > 120 else (10 if duration > 20 else 5)
+        
+        default_start_secs = max((eo_mins * 60) - bin_seconds, (st_mins - padding_mins) * 60)
+        default_end_secs = min((et_mins + padding_mins) * 60, (ec_mins * 60) + bin_seconds)
+        
+        def secs_to_iso(secs):
+            h, rem = divmod(secs, 3600)
+            m, s = divmod(rem, 60)
+            return f"{date}T{h:02d}:{m:02d}:{s:02d}"
+        
+        default_x_range = [secs_to_iso(default_start_secs), secs_to_iso(default_end_secs)]
+        
+        # Get durationData from widget metadata
+        duration_data = widget.layout.meta.get("durationData", {}) if widget.layout.meta else {}
+        
+        # Compute target range based on action
+        anchor = btn.get("anchor", "first")
+        selected_duration = btn.get("duration")
+        mins = btn.get("mins")
+        
+        target_range = None
+        
+        if action == "anchor":
+            # Anchor button - if duration was selected, apply it from new anchor
+            if selected_duration:
+                dur_data = duration_data.get(str(selected_duration), {})
+                if dur_data:
+                    eff_start = dur_data.get("effStart")
+                    eff_end = dur_data.get("effEnd")
+                    if anchor == "last" and eff_end:
+                        # Apply duration backward from effective end
+                        eff_end_secs = parse_time_mins(eff_end.split("T")[1]) * 60
+                        target_start_secs = eff_end_secs - selected_duration * 60
+                        target_range = [secs_to_iso(target_start_secs), eff_end]
+                    elif eff_start:
+                        # Apply duration forward from effective start
+                        eff_start_secs = parse_time_mins(eff_start.split("T")[1]) * 60
+                        target_end_secs = eff_start_secs + selected_duration * 60
+                        target_range = [eff_start, secs_to_iso(target_end_secs)]
+            
+            if not target_range:
+                logger.info("[chart_button] Anchor click with no duration - no range change")
+                return
+                
+        elif action == "duration":
+            # Duration button - apply from current anchor
+            if mins is None:
+                logger.warning("[chart_button] Duration action without mins")
+                return
+            
+            dur_data = duration_data.get(str(mins), {})
+            if not dur_data:
+                logger.warning(f"[chart_button] No durationData for {mins}")
+                return
+            
+            eff_start = dur_data.get("effStart")
+            eff_end = dur_data.get("effEnd")
+            
+            if anchor == "last" and eff_end:
+                eff_end_secs = parse_time_mins(eff_end.split("T")[1]) * 60
+                target_start_secs = eff_end_secs - mins * 60
+                target_range = [secs_to_iso(target_start_secs), eff_end]
+            elif eff_start:
+                eff_start_secs = parse_time_mins(eff_start.split("T")[1]) * 60
+                target_end_secs = eff_start_secs + mins * 60
+                target_range = [eff_start, secs_to_iso(target_end_secs)]
+                
+        elif action == "all":
+            target_range = default_x_range
+        
+        if not target_range:
+            logger.warning(f"[chart_button] Could not compute target_range for action={action}")
+            return
+        
+        logger.info(f"[chart_button] Computed target_range: {target_range}")
+        
+        # Determine if bin size change is needed
+        def to_epoch_ms(iso_str):
+            from datetime import datetime
+            dt = datetime.fromisoformat(iso_str.replace(" ", "T"))
+            return dt.timestamp() * 1000
+        
+        t_start = to_epoch_ms(target_range[0])
+        t_end = to_epoch_ms(target_range[1])
+        range_mins = (t_end - t_start) / 60000
+        
+        def get_bin_size_for_range(range_mins):
+            if range_mins > 160: return "5min"
+            if range_mins > 80: return "2min"
+            if range_mins >= 40: return "1min"
+            return "30s"
+        
+        new_bin_size = get_bin_size_for_range(range_mins)
+        
+        logger.info(f"[chart_button] range_mins={range_mins:.1f}, current_bin={current_bin_size}, new_bin={new_bin_size}")
+        
+        # Compute Y-axis range for the target x-range
+        cached_data_service = DATA_SERVICE
+        prices = cached_data_service.get_prices(date, ticker, exch_open_time, exch_close_time)
+        executions = cached_data_service.get_executions(date, orderid)
+        
+        view_start_dt = pd.to_datetime(target_range[0])
+        view_end_dt = pd.to_datetime(target_range[1])
+        
+        stock_view = prices[(prices["Time"] >= view_start_dt) & (prices["Time"] <= view_end_dt)]
+        exec_view = executions[(executions["Time"] >= view_start_dt) & (executions["Time"] <= view_end_dt)]
+        
+        min_p = np.inf
+        max_p = -np.inf
+        has_data = False
+        
+        if not stock_view.empty:
+            min_p = min(min_p, float(stock_view["Bid"].min()))
+            max_p = max(max_p, float(stock_view["Ask"].max()))
+            has_data = True
+        
+        if not exec_view.empty:
+            min_p = min(min_p, float(exec_view["Price"].min()))
+            max_p = max(max_p, float(exec_view["Price"].max()))
+            has_data = True
+        
+        y_range = None
+        if has_data and np.isfinite(min_p) and np.isfinite(max_p):
+            rng = max_p - min_p
+            pad = max(rng * 0.10, 0.25)
+            y_range = [min_p - pad, max_p + pad]
+        
+        logger.info(f"[chart_button] Computed y_range: {y_range}")
+        
+        if new_bin_size != current_bin_size:
+            # Bin size change needed - regenerate chart with new bins
+            logger.info(f"[chart_button] Bin size change: {current_bin_size} -> {new_bin_size}")
+            
+            is_dark = input.dark_mode() == "dark"
+            theme_colors = {
+                "primary": shiny_theme.colors.primary,
+                "secondary": shiny_theme.colors.secondary,
+                "body_color": shiny_theme.colors.body_color,
+                "warning": shiny_theme.colors.warning,
+                "danger": shiny_theme.colors.danger,
+            }
+            
+            fig = create_order_viz(
+                data_service=cached_data_service,
+                date=date,
+                ticker=ticker,
+                orderid=orderid,
+                start_time_str=start_time_str,
+                end_time_str=end_time_str,
+                bin_size=new_bin_size,
+                is_dark=is_dark,
+                theme_colors=theme_colors,
+                x_range=target_range,
+                default_x_range=default_x_range,
+                exch_open_time=exch_open_time,
+                exch_close_time=exch_close_time,
+            )
+            
+            # Update widget atomically with new traces, x-range, and y-range
+            with widget.batch_update():
+                widget.data = []
+                for trace in fig.data:
+                    widget.add_trace(trace)
+                
+                for key in fig.layout:
+                    try:
+                        setattr(widget.layout, key, fig.layout[key])
+                    except (AttributeError, ValueError):
+                        pass
+                
+                # Ensure ranges are applied
+                widget.layout.xaxis.range = target_range
+                widget.layout.xaxis2.range = target_range
+                widget.layout.xaxis3.range = target_range
+                if y_range:
+                    widget.layout.yaxis.range = y_range
+                    widget.layout.yaxis.autorange = False
+            
+            # Update last state
+            _last_chart_state["bin_size"] = new_bin_size
+            
+            logger.info(f"[chart_button] Full chart update completed with new bin size")
+        else:
+            # Same bin size - just update x-range and y-range
+            logger.info(f"[chart_button] Same bin size, updating ranges only")
+            
+            with widget.batch_update():
+                widget.layout.xaxis.range = target_range
+                widget.layout.xaxis2.range = target_range
+                widget.layout.xaxis3.range = target_range
+                if y_range:
+                    widget.layout.yaxis.range = y_range
+                    widget.layout.yaxis.autorange = False
+            
+            logger.info(f"[chart_button] Range-only update completed")
 
     @reactive.calc
     def current_order_enriched():
@@ -328,7 +632,7 @@ def server(input, output, session):
         strategy = order_detail.get("Strategy", "")
         start_time = order_detail.get("StartTime", "")
         end_time = order_detail.get("EndTime", "")
-        desk = str(order_detail.get("Desk", ""))
+        desk = order_detail.get("Desk", "")
 
         try:
             avg_price = float(avg_price_raw)
@@ -489,47 +793,104 @@ def server(input, output, session):
         return tables.get_venue_table(input, data, DATA_SERVICE)
 
 
-    @render_widget
+    @render_plotly
     def order_chart():
-        is_dark = input.dark_mode() == "dark"
-
-        data = current_order_enriched()
-        if not data:
-             return None 
-        
-        order_detail = data["order"]
-        date = str(order_detail.get("Date")).replace(".", "-")
-        orderid = str(order_detail.get("orderid", ""))
-        
-        # We need executions? create_order_viz takes DataService and calls get_executions internally...
-        # We should optimize create_order_viz to take pre-fetched data, OR just let it fetch from cache.
-        # Since DataService caches executions by (date, orderid), calling get_executions again inside create_order_viz is cheap (RAM hit only).
-        # We'll just pass the IDs for now to keep refactor minimal, relying on DataService cache which was populated by get_order_enriched.
-        
-        ticker = str(order_detail["Ticker"])
-        start_time_str = str(order_detail["StartTime"])
-        end_time_str = str(order_detail["EndTime"])
-        exch_open_time = str(order_detail["ExchOpenTime"])
-        exch_close_time = str(order_detail["ExchCloseTime"])
-
-        bin_size = volume_bin_size()
-        with reactive.isolate():
-            state = input.chart_state() if "chart_state" in input else None
-
-        # Calculate initial view range based on order duration using the new helper
-        # This replaces the entire manual calculation block including auction bar math
-        start_iso, end_iso, _ = plotly_order_viz.calculate_default_range(
-            date, start_time_str, end_time_str, exch_open_time, exch_close_time
+        """Create initial FigureWidget - will be updated by reactive effect."""
+        logger.info("Creating initial order chart FigureWidget")
+        fig = go.FigureWidget()
+        fig.update_layout(
+            height=600,
+            annotations=[dict(
+                text="No Order Selected",
+                showarrow=False,
+                xref="paper", yref="paper",
+                x=0.5, y=0.5,
+                font=dict(size=20, color="gray")
+            )]
         )
-        default_x_range = [start_iso, end_iso]
+        logger.info(f"Initial FigureWidget created: id={id(fig)}")
+        return fig
+    
+    @reactive.effect
+    def _update_order_chart():
+        """Update the existing FigureWidget when inputs change."""
+        import time
+        start_time = time.time()
+        logger.info("_update_order_chart effect triggered")
+        
+        widget = order_chart.widget
+        if widget is None:
+            logger.warning("Widget is None, skipping update")
+            return
+        
+        logger.info(f"Widget retrieved: id={id(widget)}, traces={len(widget.data)} (elapsed: {(time.time()-start_time)*1000:.1f}ms)")
+        
+        is_dark = input.dark_mode() == "dark"
+        data = current_order_enriched()
+        bin_size = volume_bin_size()
+        
+        logger.info(f"Chart inputs: is_dark={is_dark}, bin_size={bin_size}, has_data={data is not None} (elapsed: {(time.time()-start_time)*1000:.1f}ms)")
+        
+        if not data:
+            logger.info("No data available, showing placeholder")
+            # Clear chart and show placeholder
+            with widget.batch_update():
+                widget.data = []
+                widget.layout.annotations = [dict(
+                    text="No Order Selected",
+                    showarrow=False,
+                    xref="paper", yref="paper",
+                    x=0.5, y=0.5,
+                    font=dict(size=20, color="gray")
+                )]
+                widget.layout.height = 600
+            logger.info("Placeholder update completed")
+            return
+        
+        # Extract order parameters
+        order_detail = data["order"]
+        date = order_detail.get("Date", "").replace(".", "-")
+        orderid = order_detail.get("orderid", "")
+        ticker = order_detail["Ticker"]
+        start_time_str = order_detail["StartTime"]
+        end_time_str = order_detail["EndTime"]
+        exch_open_time = order_detail["ExchOpenTime"]
+        exch_close_time = order_detail["ExchCloseTime"]
+        
+        logger.info(f"Order: {ticker} {orderid} on {date}, {start_time_str}-{end_time_str} (elapsed: {(time.time()-start_time)*1000:.1f}ms)")
 
-        # PERFORMANCE FIX: Isolate the state access so we don't re-render the WHOLE chart
-        # for every single pixel of zoom/pan. We only want to re-render if the 
-        # reactive dependency 'volume_bin_size()' actually changes its return value.
+        # Calculate view range (isolated to avoid triggering on every pan/zoom)
         with reactive.isolate():
             state = input.chart_state() if "chart_state" in input else None
+            
+        st_parts = start_time_str.split(":")
+        et_parts = end_time_str.split(":")
+        st_minutes = int(st_parts[0]) * 60 + int(st_parts[1])
+        et_minutes = int(et_parts[0]) * 60 + int(et_parts[1])
+        duration = et_minutes - st_minutes
+
+        padding_mins = 30 if duration > 120 else (10 if duration > 20 else 5)
         
-        # ... logic to determine x_range remains the same, but now it doesn't trigger renders ...
+        eo_parts = exch_open_time.split(":")
+        ec_parts = exch_close_time.split(":")
+        exch_open_mins = int(eo_parts[0]) * 60 + int(eo_parts[1])
+        exch_close_mins = int(ec_parts[0]) * 60 + int(ec_parts[1])
+
+        bin_seconds = {"5min": 300, "2min": 120, "1min": 60, "30s": 30}.get(bin_size, 300)
+        
+        view_start_secs = max((exch_open_mins * 60) - bin_seconds, (st_minutes - padding_mins) * 60)
+        view_end_secs = min((et_minutes + padding_mins) * 60, (exch_close_mins * 60) + bin_seconds)
+
+        view_start_h, view_start_rem = divmod(view_start_secs, 3600)
+        view_start_m, view_start_s = divmod(view_start_rem, 60)
+        view_end_h, view_end_rem = divmod(view_end_secs, 3600)
+        view_end_m, view_end_s = divmod(view_end_rem, 60)
+        
+        default_x_range = [
+            f"{date}T{view_start_h:02d}:{view_start_m:02d}:{view_start_s:02d}",
+            f"{date}T{view_end_h:02d}:{view_end_m:02d}:{view_end_s:02d}",
+        ]
+
         current_order_key = f"{date}:{orderid}"
         x_range = default_x_range
         
@@ -538,23 +899,9 @@ def server(input, output, session):
             saved_key = state.get("orderKey")
             if saved_range and len(saved_range) == 2 and saved_key == current_order_key:
                 x_range = saved_range
-        elif "chart_x_range" in input:
-            # Fallback for legacy
-            with reactive.isolate():
-                saved_data = input.chart_x_range()
-            if saved_data and isinstance(saved_data, dict):
-                saved_range = saved_data.get("range")
-                saved_key = saved_data.get("orderKey")
-                if saved_range and len(saved_range) == 2 and saved_key == current_order_key:
-                    x_range = saved_range
-            elif saved_data and isinstance(saved_data, list) and len(saved_data) == 2:
-                # Legacy format (just the range) - don't use it for new orders
-                pass
-        
-        # Track bin size for any future logic that needs it
-        current_bin = bin_size
-        _last_bin_size["value"] = current_bin
+                logger.info(f"Using saved x_range from state")
 
+        # Generate the figure
         theme_colors = {
             "primary": shiny_theme.colors.primary,
             "secondary": shiny_theme.colors.secondary,
@@ -563,21 +910,143 @@ def server(input, output, session):
             "danger": shiny_theme.colors.danger,
         }
 
-        return plotly_order_viz.create_order_viz(
-            data_service=DATA_SERVICE,
+        logger.info(f"Creating new chart figure with bin_size={bin_size} (elapsed: {(time.time()-start_time)*1000:.1f}ms)")
+        fig_start = time.time()
+        fig = create_order_viz(
+            data_service=cached_data_service,
             date=date,
-            ticker=str(ticker),
+            ticker=ticker,
             orderid=orderid,
-            start_time_str=str(start_time_str),
-            end_time_str=str(end_time_str),
-            bin_size=str(bin_size),
-            is_dark=bool(is_dark),
+            start_time_str=start_time_str,
+            end_time_str=end_time_str,
+            bin_size=bin_size,
+            is_dark=is_dark,
             theme_colors=theme_colors,
             x_range=[str(x_range[0]), str(x_range[1])],
             default_x_range=[str(default_x_range[0]), str(default_x_range[1])],
             exch_open_time=exch_open_time,
             exch_close_time=exch_close_time,
         )
+        fig_elapsed = (time.time() - fig_start) * 1000
+        logger.info(f"Figure created in {fig_elapsed:.1f}ms: {len(fig.data)} traces, {len(fig.layout.annotations or [])} annotations (total elapsed: {(time.time()-start_time)*1000:.1f}ms)")
+
+        # Check if we can do an efficient update (only bin_size changed)
+        prev_order_key = _last_chart_state["order_key"]
+        prev_is_dark = _last_chart_state["is_dark"]
+        prev_bin_size = _last_chart_state["bin_size"]
+        
+        # Determine if only bin_size changed (same order, same theme)
+        bin_size_only_changed = (
+            prev_order_key == current_order_key and
+            prev_is_dark == is_dark and
+            prev_bin_size is not None and
+            prev_bin_size != bin_size and
+            len(widget.data) > 0  # Widget must have existing traces
+        )
+        
+        # Update tracking state
+        _last_chart_state["order_key"] = current_order_key
+        _last_chart_state["is_dark"] = is_dark
+        _last_chart_state["bin_size"] = bin_size
+
+        # Update the widget in-place with batch_update for efficiency
+        batch_start = time.time()
+        
+        if bin_size_only_changed:
+            # EFFICIENT UPDATE: Only replace volume traces (Lit Volume, Dark Volume, PRate)
+            # These are the only traces affected by bin_size changes
+            logger.info(f"🚀 Efficient update: only bin_size changed ({prev_bin_size} -> {bin_size})")
+            
+            # Volume trace names that need to be replaced
+            volume_trace_names = {"Lit Volume", "Dark Volume", "PRate"}
+            
+            with widget.batch_update():
+                # Find indices of volume traces to remove (iterate in reverse to preserve indices)
+                indices_to_remove = []
+                for i, trace in enumerate(widget.data):
+                    if hasattr(trace, 'name') and trace.name in volume_trace_names:
+                        indices_to_remove.append(i)
+                
+                # Remove old volume traces (in reverse order to maintain indices)
+                for i in reversed(indices_to_remove):
+                    widget.data = list(widget.data[:i]) + list(widget.data[i+1:])
+                
+                logger.info(f"Removed {len(indices_to_remove)} old volume traces")
+                
+                # Add new volume traces from the figure
+                new_volume_traces = []
+                for trace in fig.data:
+                    if hasattr(trace, 'name') and trace.name in volume_trace_names:
+                        new_volume_traces.append(trace)
+                        widget.add_trace(trace)
+                
+                logger.info(f"Added {len(new_volume_traces)} new volume traces")
+                
+                # Update xaxis ranges to match new bin alignment
+                if hasattr(fig.layout, 'xaxis') and hasattr(fig.layout.xaxis, 'range'):
+                    widget.layout.xaxis.range = fig.layout.xaxis.range
+                if hasattr(fig.layout, 'xaxis2') and hasattr(fig.layout.xaxis2, 'range'):
+                    widget.layout.xaxis2.range = fig.layout.xaxis2.range
+                if hasattr(fig.layout, 'xaxis3') and hasattr(fig.layout.xaxis3, 'range'):
+                    widget.layout.xaxis3.range = fig.layout.xaxis3.range
+
+                # Apply y-axis range computed server-side for the current x-range.
+                # Without this, initial load (and some server-driven updates) can rely on
+                # client-side relayout to trigger scaling.
+                if hasattr(fig.layout, 'yaxis') and hasattr(fig.layout.yaxis, 'range') and fig.layout.yaxis.range:
+                    logger.info(f"Applying yaxis.range from Python (bin update): {fig.layout.yaxis.range}")
+                    widget.layout.yaxis.range = fig.layout.yaxis.range
+                    widget.layout.yaxis.autorange = False
+                    
+                # Update metadata (contains binSize info)
+                if hasattr(fig.layout, 'meta'):
+                    widget.layout.meta = fig.layout.meta
+        else:
+            # FULL UPDATE: Replace all traces (order changed, theme changed, or initial load)
+            logger.info("Starting batch_update to replace ALL widget content")
+            with widget.batch_update():
+                # Clear existing traces
+                widget.data = []
+                
+                # Add new traces from the figure
+                for trace in fig.data:
+                    widget.add_trace(trace)
+                
+                # Update layout properties (can't replace entire layout object)
+                # Update all layout properties from the new figure
+                for key in fig.layout:
+                    try:
+                        setattr(widget.layout, key, fig.layout[key])
+                    except (AttributeError, ValueError) as e:
+                        # Some properties might be read-only or incompatible
+                        logger.debug(f"Skipping layout property {key}: {e}")
+                        pass
+                
+                # Explicitly set xaxis ranges to ensure they're applied atomically with new bins
+                # This prevents showing intermediate state with old range and new bins
+                if hasattr(fig.layout, 'xaxis') and hasattr(fig.layout.xaxis, 'range'):
+                    widget.layout.xaxis.range = fig.layout.xaxis.range
+                    logger.info(f"Applied xaxis.range: {fig.layout.xaxis.range}")
+                if hasattr(fig.layout, 'xaxis2') and hasattr(fig.layout.xaxis2, 'range'):
+                    widget.layout.xaxis2.range = fig.layout.xaxis2.range
+                if hasattr(fig.layout, 'xaxis3') and hasattr(fig.layout.xaxis3, 'range'):
+                    widget.layout.xaxis3.range = fig.layout.xaxis3.range
+
+                # Explicitly apply y-axis range (computed in create_order_viz from the initial x-range).
+                if hasattr(fig.layout, 'yaxis') and hasattr(fig.layout.yaxis, 'range') and fig.layout.yaxis.range:
+                    logger.info(f"Applying yaxis.range from Python: {fig.layout.yaxis.range}")
+                    widget.layout.yaxis.range = fig.layout.yaxis.range
+                    widget.layout.yaxis.autorange = False
+                else:
+                    logger.warning(f"No yaxis.range in fig.layout! yaxis exists: {hasattr(fig.layout, 'yaxis')}, has range: {hasattr(fig.layout.yaxis, 'range') if hasattr(fig.layout, 'yaxis') else False}, value: {fig.layout.yaxis.range if hasattr(fig.layout, 'yaxis') and hasattr(fig.layout.yaxis, 'range') else None}")
+        
+        batch_elapsed = (time.time() - batch_start) * 1000
+        total_elapsed = (time.time() - start_time) * 1000
+        update_type = "EFFICIENT (volume only)" if bin_size_only_changed else "FULL"
+        logger.info(f"batch_update ({update_type}) completed in {batch_elapsed:.1f}ms: widget now has {len(widget.data)} traces (TOTAL: {total_elapsed:.1f}ms)")
+
+
+
 
 
     # --- Databot Logic ---
