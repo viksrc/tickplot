@@ -82,6 +82,186 @@ def calculate_default_range(
 	return view_start.strftime("%Y-%m-%dT%H:%M:%S"), view_end.strftime("%Y-%m-%dT%H:%M:%S"), bin_size_str
 
 
+def build_volume_traces(
+	volume_data: pd.DataFrame,
+	date: str,
+	exch_open_time: str,
+	exch_close_time: str,
+	bin_size: str,
+	is_dark: bool,
+	theme_colors: dict[str, str],
+) -> list[go.Bar | go.Scatter]:
+	"""Build only the volume traces (Lit Volume, Dark Volume, PRate) without creating full figure.
+	
+	This is used for efficient updates when only bin size changes.
+	
+	Parameters:
+	- volume_data: DataFrame with volume data (already binned at the correct bin_size)
+	- date: Order date (YYYY-MM-DD)
+	- exch_open_time, exch_close_time: Exchange hours (HH:MM)
+	- bin_size: "5min" | "2min" | "1min" | "30s"
+	- is_dark: Dark mode flag
+	- theme_colors: Theme color dict
+	
+	Returns: List of Plotly traces [Lit Volume, Dark Volume (if any), PRate (if any)]
+	"""
+	# Determine colors based on theme
+	if is_dark:
+		grid_color = "rgba(255, 255, 255, 0.1)"
+		volume_color = "rgba(92, 124, 250, 0.95)"
+		dark_vol_color = "#7e868e"
+		prate_color = "#f59e0b"
+	else:
+		grid_color = "rgba(0, 0, 0, 0.1)"
+		volume_color = "rgba(24, 100, 171, 0.95)"
+		dark_vol_color = "#495057"
+		prate_color = "#d97706"
+	
+	# Process volume data (same logic as in create_order_viz)
+	if "Kind" in volume_data.columns:
+		regular_vol = volume_data.loc[volume_data["Kind"] == "Regular"].copy()
+		auction_vol = volume_data.loc[volume_data["Kind"] != "Regular"].copy()
+	else:
+		regular_vol = volume_data.copy()
+		auction_vol = volume_data.iloc[0:0].copy()
+	
+	plot_vol = regular_vol.copy()
+	
+	# Calculate open_bin_time based on exchange hours and bin size
+	exch_open_dt = pd.to_datetime(f"{date} {exch_open_time}:00")
+	exch_close_dt = pd.to_datetime(f"{date} {exch_close_time}:00")
+	
+	if bin_size == "5min":
+		bin_delta = pd.to_timedelta(5, unit="m")
+		time_fmt = "%H:%M"
+		open_bin_time = exch_open_dt - pd.Timedelta(minutes=5)
+	elif bin_size == "2min":
+		bin_delta = pd.to_timedelta(2, unit="m")
+		time_fmt = "%H:%M"
+		open_bin_time = exch_open_dt - pd.Timedelta(minutes=2)
+	elif bin_size == "1min":
+		bin_delta = pd.to_timedelta(1, unit="m")
+		time_fmt = "%H:%M"
+		open_bin_time = exch_open_dt - pd.Timedelta(minutes=1)
+	else:  # 30s
+		bin_delta = pd.to_timedelta(30, unit="s")
+		time_fmt = "%H:%M:%S"
+		open_bin_time = exch_open_dt - pd.Timedelta(seconds=30)
+	
+	close_bin_time = exch_close_dt
+	
+	if not plot_vol.empty and "Time" in plot_vol.columns:
+		start_txt = plot_vol["Time"].dt.strftime(time_fmt)
+		end_txt = (plot_vol["Time"] + bin_delta).dt.strftime(time_fmt)
+		plot_vol["HoverLabel"] = start_txt + "–" + end_txt
+	
+	open_rows = (
+		auction_vol.loc[auction_vol.get("Kind", "") == "Open"].copy()
+		if not auction_vol.empty
+		else auction_vol.iloc[0:0].copy()
+	)
+	close_rows = (
+		auction_vol.loc[auction_vol.get("Kind", "") == "Close"].copy()
+		if not auction_vol.empty
+		else auction_vol.iloc[0:0].copy()
+	)
+	
+	def _append_auction_bar(target_time: pd.Timestamp, auction_df: pd.DataFrame, label: str) -> None:
+		nonlocal plot_vol
+		if auction_df.empty:
+			return
+		auction_total = float(pd.to_numeric(auction_df["Volume"], errors="coerce").fillna(0).sum())
+		row_data = {
+			"Time": target_time,
+			"Volume": auction_total,
+			"LitVolume": auction_total,
+			"DarkVolume": 0,
+			"HoverLabel": label
+		}
+		if "Kind" in plot_vol.columns:
+			row_data["Kind"] = label
+		plot_vol = pd.concat([plot_vol, pd.DataFrame([row_data])], ignore_index=True)
+	
+	_append_auction_bar(open_bin_time, open_rows, "Open")
+	_append_auction_bar(close_bin_time, close_rows, "Close")
+	
+	traces = []
+	
+	if not plot_vol.empty:
+		plot_vol = plot_vol.sort_values("Time").reset_index(drop=True)
+		vol_time_values = plot_vol["Time"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
+		hover_labels = (
+			plot_vol["HoverLabel"].astype(str).tolist()
+			if "HoverLabel" in plot_vol.columns
+			else plot_vol["Time"].dt.strftime("%H:%M").tolist()
+		)
+		
+		# Lit/Dark/Total calculations
+		lit_vols = plot_vol.get("LitVolume", plot_vol["Volume"]).fillna(0).astype(int).tolist()
+		dark_vols = plot_vol.get("DarkVolume", pd.Series(0, index=plot_vol.index)).fillna(0).astype(int).tolist()
+		total_vols = (np.array(lit_vols) + np.array(dark_vols)).tolist()
+		
+		# Calculate %Dark for tooltip
+		pct_dark_list = []
+		for l, d in zip(lit_vols, dark_vols):
+			tot = l + d
+			if tot > 0:
+				pct_dark_list.append(d / tot * 100.0)
+			else:
+				pct_dark_list.append(0.0)
+		
+		custom_data = list(zip(hover_labels, total_vols, pct_dark_list))
+		
+		# Build hovertext strings
+		hover_texts = []
+		for label, vol, dark_pct in custom_data:
+			hover_texts.append(f"{label}<br>Volume: {vol:,}<br>Dark%: {dark_pct:.1f}%")
+		
+		# Extract just the hover labels for customdata
+		hover_labels_only = [item[0] for item in custom_data]
+		
+		# Trace 1: Lit Volume
+		traces.append(go.Bar(
+			x=vol_time_values,
+			y=lit_vols,
+			name="Lit Volume",
+			offset=0,
+			hovertext=hover_texts,
+			customdata=hover_labels_only,
+			hoverinfo="text",
+			marker_color=volume_color,
+			marker_line_width=0.5,
+			marker_line_color=grid_color,
+			showlegend=False,
+			xaxis="x2",  # Volume chart is on row 2
+			yaxis="y2",
+		))
+		
+		# Trace 2: Dark Volume
+		if any(v > 0 for v in dark_vols):
+			traces.append(go.Bar(
+				x=vol_time_values,
+				y=dark_vols,
+				name="Dark Volume",
+				offset=0,
+				customdata=custom_data,
+				marker_color=dark_vol_color,
+				marker_line_width=0.5,
+				marker_line_color=grid_color,
+				showlegend=False,
+				hoverinfo="skip",
+				xaxis="x2",
+				yaxis="y2",
+			))
+	
+	# Trace: PRate line (if analytics data is available)
+	# Note: We'd need to pass binned_analytics separately if PRate is needed
+	# For now, skipping PRate in this minimal implementation
+	# The caller will need to handle PRate separately or we extend this function
+	
+	return traces
+
+
 def create_order_viz(
 	*,
 	data_service: Any,
