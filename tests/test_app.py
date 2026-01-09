@@ -1427,3 +1427,141 @@ def test_all_button_includes_auction_bars(page: Page, app: ShinyAppProc):
     
     LOGGER.info(f"  ✅ PASSED: 'All' button correctly includes Open and Close auction bars (verified in both range AND trace data)")
 
+
+@pytest.mark.anyio
+def test_bin_size_resets_on_order_switch(page: Page, app: ShinyAppProc):
+    """
+    Test: Bin size should reset based on new order's duration when switching orders.
+    
+    Scenario:
+    1. Select a long-duration order (e.g., 180 mins) -> should use 5min bins
+    2. Click a duration button to zoom in (e.g., 15min) -> should switch to smaller bins (30s or 1min)
+    3. Switch to a different short-duration order (e.g., 30 mins) -> should reset to appropriate bins for that duration (30s)
+    
+    Bug fix verification: The bin size from the previous order should NOT carry over.
+    """
+    LOGGER.info("Starting test_bin_size_resets_on_order_switch")
+    
+    page.goto(app.url)
+    LOGGER.info(f"  Navigated to {app.url}")
+    
+    # Load data
+    start_date = controller.InputDate(page, "start_date")
+    end_date = controller.InputDate(page, "end_date")
+    start_date.set("2025-01-01")
+    end_date.set("2025-01-03")
+    page.locator("#query_btn").click()
+    page.wait_for_selector("#orders_table .tabulator-row", timeout=5000)
+    
+    def get_bin_size():
+        """Helper to extract current bin size from chart metadata."""
+        return page.evaluate("""() => {
+            const el = document.getElementById('order_chart');
+            const plotlyDiv = el.querySelector('.js-plotly-plot') || el;
+            if (!plotlyDiv || !plotlyDiv.layout || !plotlyDiv.layout.meta) return null;
+            return plotlyDiv.layout.meta.binSize;
+        }""")
+    
+    def get_order_duration(row_selector):
+        """Helper to get order duration in minutes from table row."""
+        return page.evaluate(f"""() => {{
+            const row = document.querySelector('{row_selector}');
+            if (!row) return null;
+            const startCell = row.querySelector('[tabulator-field="StartTime"]');
+            const endCell = row.querySelector('[tabulator-field="EndTime"]');
+            if (!startCell || !endCell) return null;
+            
+            const parseTime = (str) => {{
+                const parts = str.split(':');
+                return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+            }};
+            
+            return parseTime(endCell.textContent) - parseTime(startCell.textContent);
+        }}""")
+    
+    # Step 1: Find and click a long-duration order (>160 mins for 5min bins)
+    LOGGER.info("Step 1: Selecting a long-duration order")
+    orders_table = page.locator("#orders_table")
+    
+    # Try to find an order with duration > 160 mins
+    # We'll scan the first few rows and pick one that qualifies
+    long_duration_row = None
+    for i in range(20):  # Check first 20 rows
+        row_selector = f"#orders_table .tabulator-row:nth-child({i+1})"
+        duration = get_order_duration(row_selector)
+        if duration and duration > 160:
+            long_duration_row = page.locator(row_selector)
+            LOGGER.info(f"  Found long-duration order at row {i+1}: {duration} mins")
+            break
+    
+    if not long_duration_row:
+        LOGGER.warning("  No long-duration order found, creating scenario artificially")
+        # Fallback: just use first row and we'll verify the behavior logic
+        long_duration_row = orders_table.locator(".tabulator-row").first
+    
+    long_duration_row.click()
+    page.get_by_text("Chart", exact=True).click()
+    page.wait_for_function("""() => {
+        const el = document.getElementById('order_chart');
+        const plotlyDiv = el.querySelector('.js-plotly-plot') || el;
+        return plotlyDiv && plotlyDiv.data && plotlyDiv.data.length >= 3;
+    }""", timeout=5000)
+    
+    initial_bin_size = get_bin_size()
+    LOGGER.info(f"  Initial bin size for long order: {initial_bin_size}")
+    verify(initial_bin_size in ["5min", "2min", "1min", "30s"], 
+           f"Initial bin size is valid: {initial_bin_size}")
+    
+    # Step 2: Click a duration button to change the range (and possibly bin size)
+    LOGGER.info("Step 2: Clicking 15min duration button to zoom in")
+    duration_15min = page.locator("button[data-duration='15']")
+    duration_15min.click()
+    
+    # Wait for chart to update
+    page.wait_for_timeout(500)  # Allow for debounce and update
+    
+    zoomed_bin_size = get_bin_size()
+    LOGGER.info(f"  Bin size after 15min zoom: {zoomed_bin_size}")
+    verify(zoomed_bin_size in ["1min", "30s"], 
+           f"Zoomed bin size should be smaller (1min or 30s): {zoomed_bin_size}")
+    
+    # Step 3: Switch to a different order with short duration (<40 mins for 30s bins)
+    LOGGER.info("Step 3: Switching to a short-duration order")
+    
+    # Go back to table
+    page.get_by_text("Table", exact=True).click()
+    
+    # Find a short-duration order
+    short_duration_row = None
+    for i in range(20):
+        row_selector = f"#orders_table .tabulator-row:nth-child({i+1})"
+        duration = get_order_duration(row_selector)
+        if duration and duration < 40:
+            short_duration_row = page.locator(row_selector)
+            LOGGER.info(f"  Found short-duration order at row {i+1}: {duration} mins")
+            break
+    
+    if not short_duration_row:
+        LOGGER.warning("  No short-duration order found, using second row as fallback")
+        short_duration_row = orders_table.locator(".tabulator-row").nth(1)
+    
+    short_duration_row.click()
+    page.get_by_text("Chart", exact=True).click()
+    page.wait_for_function("""() => {
+        const el = document.getElementById('order_chart');
+        const plotlyDiv = el.querySelector('.js-plotly-plot') || el;
+        return plotlyDiv && plotlyDiv.data && plotlyDiv.data.length >= 3;
+    }""", timeout=5000)
+    
+    # Critical assertion: bin size should reset based on NEW order's duration
+    # NOT carry over the zoomed bin size from previous order
+    new_order_bin_size = get_bin_size()
+    LOGGER.info(f"  Bin size for short-duration order: {new_order_bin_size}")
+    
+    # For a short order (<40 mins), initial bin size should be 30s
+    # NOT the zoomed bin size from the previous order
+    verify(new_order_bin_size == "30s", 
+           f"Bin size should reset to 30s for short order, got: {new_order_bin_size}")
+    
+    LOGGER.info("  ✅ PASSED: Bin size correctly resets when switching orders")
+

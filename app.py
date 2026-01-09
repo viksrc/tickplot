@@ -309,14 +309,26 @@ def server(input, output, session):
     @reactive.calc
     def volume_bin_size():
         range_mins = None
+        row = input.orders_table_row_clicked()
+        
+        # Get current order key
+        current_order_key = None
+        if row:
+            raw_date = str(row.get("Date"))
+            date = raw_date.replace(".", "-")
+            order_id = str(row.get("orderid", ""))
+            current_order_key = f"{date}:{order_id}"
+        
+        # Only use cached rangeMins if it's for the SAME order
         if "chart_state" in input:
             state = input.chart_state()
             if state and isinstance(state, dict):
-                range_mins = state.get("rangeMins")
+                saved_order_key = state.get("orderKey")
+                if saved_order_key == current_order_key:
+                    range_mins = state.get("rangeMins")
         
         if range_mins is None:
-            # Initial state: check the duration of the selected order
-            row = input.orders_table_row_clicked()
+            # Initial state or order changed: check the duration of the selected order
             if not row:
                      # No selection, default to 5min
                      return "5min"

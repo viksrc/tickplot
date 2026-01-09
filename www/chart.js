@@ -124,7 +124,7 @@ function resizeAllPlotly() {
             graphDiv._selectedDuration = savedState?.duration || null;
             
             // Update button visual state to match reset state
-            setTimeout(() => _updateButtonSelectionUI(), 50);
+            // setTimeout(() => _updateButtonSelectionUI(), 50);
         }
 
         // Only bind event handlers once
