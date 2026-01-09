@@ -221,6 +221,13 @@ function resizeAllPlotly() {
                 _updateButtonSelectionUI();
             }
 
+            // Mark that a button was clicked - relayout handler should ignore events for 500ms
+            graphDiv._serverUpdateInProgress = true;
+            if (graphDiv._serverUpdateTimeout) clearTimeout(graphDiv._serverUpdateTimeout);
+            graphDiv._serverUpdateTimeout = setTimeout(() => {
+                graphDiv._serverUpdateInProgress = false;
+            }, 500);
+
             // Send button action to server - server will compute range and update chart atomically
             if (window.Shiny) {
                 const orderKey = graphDiv._currentOrderKey || null;
@@ -240,6 +247,12 @@ function resizeAllPlotly() {
         // The plotly_relayout handler below still handles slider/zoom interactions.
 
         graphDiv.on('plotly_relayout', function (eventdata) {
+            // Skip processing if server update is in progress (from button click)
+            // This prevents JS from interfering with the server's atomic batch update
+            if (graphDiv._serverUpdateInProgress) {
+                return;
+            }
+
             // Detect changes on MAIN axis (xaxis) or SLIDER axis (xaxis3).
             // With matches='x', dragging xaxis3 syncs xaxis VISUALLY but does NOT fire xaxis events.
             // So we must explicitly check for xaxis3 changes.
@@ -311,26 +324,26 @@ function resizeAllPlotly() {
                 // 1. Determine the correct bin size for this range
                 const newBinSize = rangeMins > 160 ? '5min' : (rangeMins > 80 ? '2min' : (rangeMins >= 40 ? '1min' : '30s'));
 
-                // Initialize tracking flags from server-rendered bin size (stored in metadata)
-                if (!graphDiv._lastBinSize) {
-                    // Use the bin size the server rendered with, NOT the current view range
-                    const serverBinSize = graphDiv.layout?.meta?.binSize;
-                    if (serverBinSize) {
-                        graphDiv._lastBinSize = serverBinSize;
-                    } else {
-                        // Fallback: calculate from initial layout range
-                        const layoutRange = graphDiv.layout?.xaxis?.range;
-                        if (layoutRange && layoutRange.length === 2) {
-                            const iMins = (_toEpochMs(layoutRange[1]) - _toEpochMs(layoutRange[0])) / 60000;
-                            graphDiv._lastBinSize = iMins > 160 ? '5min' : (iMins > 80 ? '2min' : (iMins >= 40 ? '1min' : '30s'));
-                        } else {
-                            graphDiv._lastBinSize = '5min';
-                        }
-                    }
+                // 2. Get the CURRENT bin size from server metadata (source of truth)
+                // Server updates this in batch_update, so it's always correct
+                const currentServerBinSize = graphDiv.layout?.meta?.binSize;
+                
+                // 3. Compare with server's current bin size, NOT our stale JS variable
+                // If server already updated to the correct bin size, this will be a no-op
+                if (currentServerBinSize && newBinSize === currentServerBinSize) {
+                    // Server already has the correct bin size - nothing to do
+                    // This happens when server proactively updated bins (e.g., via button click)
+                    return;
                 }
 
-                // 2. Handle Bin Size Changes - ONLY send to server when bin size changes
-                if (newBinSize !== graphDiv._lastBinSize) {
+                // Initialize tracking flag if needed (for fallback when no server metadata)
+                if (!graphDiv._lastBinSize) {
+                    graphDiv._lastBinSize = currentServerBinSize || '5min';
+                }
+
+                // 4. Handle Bin Size Changes - ONLY send to server when bin size needs to change
+                // AND it's different from what the server currently has
+                if (newBinSize !== currentServerBinSize && newBinSize !== graphDiv._lastBinSize) {
                     if (graphDiv._binChangeTimeout) clearTimeout(graphDiv._binChangeTimeout);
 
                     graphDiv._binChangeTimeout = setTimeout(() => {

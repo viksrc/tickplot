@@ -165,9 +165,6 @@ app_ui = ui.page_navbar(
 
 
 def server(input, output, session):
-    # Print session ID for manual API testing
-    print(f"\n--- User connected. Session ID: {session.id} ---\n")
-    
     # Session-level cache for volume data to speed up bin size changes
     # Key: (date, ticker, bin_size) → Value: DataFrame
     volume_data_cache = {}
@@ -604,30 +601,39 @@ def server(input, output, session):
             volume_trace_names = {"Lit Volume", "Dark Volume", "PRate"}
             
             with widget.batch_update():
-                # Update ranges FIRST to avoid rendering glitch
+                # Find existing volume traces and update their data IN PLACE
+                # This is atomic - no remove/add cycle that causes visual glitch
+                lit_trace_idx = None
+                dark_trace_idx = None
+                
+                for i, trace in enumerate(widget.data):
+                    if hasattr(trace, 'name'):
+                        if trace.name == "Lit Volume":
+                            lit_trace_idx = i
+                        elif trace.name == "Dark Volume":
+                            dark_trace_idx = i
+                
+                # Update existing traces with new data
+                for new_trace in new_volume_traces:
+                    if new_trace.name == "Lit Volume" and lit_trace_idx is not None:
+                        widget.data[lit_trace_idx].x = new_trace.x
+                        widget.data[lit_trace_idx].y = new_trace.y
+                        widget.data[lit_trace_idx].customdata = new_trace.customdata
+                        widget.data[lit_trace_idx].hovertext = new_trace.hovertext
+                        logger.info(f"[chart_button] Updated Lit Volume trace in place")
+                    elif new_trace.name == "Dark Volume" and dark_trace_idx is not None:
+                        widget.data[dark_trace_idx].x = new_trace.x
+                        widget.data[dark_trace_idx].y = new_trace.y
+                        widget.data[dark_trace_idx].customdata = new_trace.customdata
+                        logger.info(f"[chart_button] Updated Dark Volume trace in place")
+                
+                # Update layout (ranges and metadata)
                 widget.layout.xaxis.range = target_range
                 widget.layout.xaxis2.range = target_range
                 widget.layout.xaxis3.range = target_range
                 if y_range:
                     widget.layout.yaxis.range = y_range
                     widget.layout.yaxis.autorange = False
-                
-                # Remove old volume traces (in reverse order to preserve indices)
-                indices_to_remove = []
-                for i, trace in enumerate(widget.data):
-                    if hasattr(trace, 'name') and trace.name in volume_trace_names:
-                        indices_to_remove.append(i)
-                
-                for i in reversed(indices_to_remove):
-                    widget.data = list(widget.data[:i]) + list(widget.data[i+1:])
-                
-                logger.info(f"[chart_button] Removed {len(indices_to_remove)} old volume traces")
-                
-                # Add new volume traces
-                for trace in new_volume_traces:
-                    widget.add_trace(trace)
-                
-                logger.info(f"[chart_button] Added {len(new_volume_traces)} new volume traces")
                 
                 # Update metadata (binSize and defaultRange)
                 if not widget.layout.meta:
@@ -873,7 +879,6 @@ def server(input, output, session):
         """Update the existing FigureWidget when inputs change."""
         import time
         start_time = time.time()
-        logger.info("_update_order_chart effect triggered")
         
         widget = order_chart.widget
         if widget is None:
