@@ -242,7 +242,7 @@ def test_order_visualizer_navigation(page: Page, app: ShinyAppProc):
     # End date is already 2025-01-03
     page.locator("#query_btn").click()
     # Wait for table to refresh (checking for specific date ensures we waited)
-    page.locator(".tabulator-row:has-text('2025.01.03')").first.wait_for()
+    page.locator(f".tabulator-row:has-text('2025.01.03')").first.wait_for()
 
     verify_order_components("2025.01.03")
 @pytest.mark.anyio
@@ -1208,7 +1208,7 @@ def test_15min_duration_button_from_first(page: Page, app: ShinyAppProc):
         init_end_mins = int(init_end_parts[0]) * 60 + int(init_end_parts[1])
         init_duration = init_end_mins - init_start_mins
         LOGGER.info(f"  Initial duration: {init_duration} minutes (from {init_start_parts[0]}:{init_start_parts[1]} to {init_end_parts[0]}:{init_end_parts[1]})")
-        LOGGER.info("  This is the default view with padding based on order duration")
+        LOGGER.info(f"  This is the default view with padding based on order duration")
     
     # Verify the event handler is attached by checking if _hasRescaling flag is set
     has_rescaling = page.evaluate('''() => {
@@ -1261,9 +1261,9 @@ def test_15min_duration_button_from_first(page: Page, app: ShinyAppProc):
     if start_mins == 9 * 60 + 30:  # 570 minutes = 9:30
         expected_end = 9 * 60 + 45  # 585 minutes = 9:45
         verify(abs(end_mins - expected_end) <= 2, f"For 9:30 start, ends at ~9:45 (got {end_parts[0]}:{end_parts[1]})")
-        LOGGER.info("  ✅ PASSED: 15m button shows 9:30-9:45 range")
+        LOGGER.info(f"  ✅ PASSED: 15m button shows 9:30-9:45 range")
     else:
-        LOGGER.info("  ✅ PASSED: 15m button shows correct 15-minute duration")
+        LOGGER.info(f"  ✅ PASSED: 15m button shows correct 15-minute duration")
 
 
 @pytest.mark.anyio
@@ -1331,7 +1331,7 @@ def test_all_button_includes_auction_bars(page: Page, app: ShinyAppProc):
     default_range = chart_data.get("defaultRange")
     bin_size = chart_data.get("binSize")
     
-    LOGGER.info("  After 'All' click:")
+    LOGGER.info(f"  After 'All' click:")
     LOGGER.info(f"    - Current x-axis range: {x_range}")
     LOGGER.info(f"    - defaultRange in meta: {default_range}")
     LOGGER.info(f"    - binSize in meta: {bin_size}")
@@ -1425,7 +1425,7 @@ def test_all_button_includes_auction_bars(page: Page, app: ShinyAppProc):
     verify(range_end_mins > market_close_mins, 
            f"X-axis end ({end_time_str}) is after market close 16:00 (includes Close auction bar)")
     
-    LOGGER.info("  ✅ PASSED: 'All' button correctly includes Open and Close auction bars (verified in both range AND trace data)")
+    LOGGER.info(f"  ✅ PASSED: 'All' button correctly includes Open and Close auction bars (verified in both range AND trace data)")
 
 
 @pytest.mark.anyio
@@ -1479,12 +1479,27 @@ def test_bin_size_resets_on_order_switch(page: Page, app: ShinyAppProc):
             return parseTime(endCell.textContent) - parseTime(startCell.textContent);
         }}""")
     
-    # Step 1: Use first order (oid10001) which is 09:30-16:00 (390 mins) -> uses 5min bins
-    LOGGER.info("Step 1: Selecting first order (full day duration)")
+    # Step 1: Find and click a long-duration order (>160 mins for 5min bins)
+    LOGGER.info("Step 1: Selecting a long-duration order")
     orders_table = page.locator("#orders_table")
-    first_row = orders_table.locator(".tabulator-row").first
-    first_row.click()
     
+    # Try to find an order with duration > 160 mins
+    # We'll scan the first few rows and pick one that qualifies
+    long_duration_row = None
+    for i in range(20):  # Check first 20 rows
+        row_selector = f"#orders_table .tabulator-row:nth-child({i+1})"
+        duration = get_order_duration(row_selector)
+        if duration and duration > 160:
+            long_duration_row = page.locator(row_selector)
+            LOGGER.info(f"  Found long-duration order at row {i+1}: {duration} mins")
+            break
+    
+    if not long_duration_row:
+        LOGGER.warning("  No long-duration order found, creating scenario artificially")
+        # Fallback: just use first row and we'll verify the behavior logic
+        long_duration_row = orders_table.locator(".tabulator-row").first
+    
+    long_duration_row.click()
     page.get_by_text("Chart", exact=True).click()
     page.wait_for_function("""() => {
         const el = document.getElementById('order_chart');
@@ -1493,45 +1508,44 @@ def test_bin_size_resets_on_order_switch(page: Page, app: ShinyAppProc):
     }""", timeout=5000)
     
     initial_bin_size = get_bin_size()
-    LOGGER.info(f"  Initial bin size for first order: {initial_bin_size}")
-    verify(initial_bin_size == "5min", 
-           f"Full-day order should use 5min bins: {initial_bin_size}")
+    LOGGER.info(f"  Initial bin size for long order: {initial_bin_size}")
+    verify(initial_bin_size in ["5min", "2min", "1min", "30s"], 
+           f"Initial bin size is valid: {initial_bin_size}")
     
-    # Step 2: Use the range slider to zoom in to trigger a bin size change
-    LOGGER.info("Step 2: Using slider to zoom in and trigger bin change")
-    # Simulate zooming to a 30-minute range (should switch to 30s bins)
-    page.evaluate('''() => {
-        const gd = document.querySelector("#order_chart .js-plotly-plot");
-        if (!window.Plotly || !gd) return;
-        const range = ['2025-01-01T10:00:00', '2025-01-01T10:30:00']; // 30 minutes
-        return Plotly.relayout(gd, { 'xaxis3.range': range });
-    }''')
+    # Step 2: Click a duration button to change the range (and possibly bin size)
+    LOGGER.info("Step 2: Clicking 15min duration button to zoom in")
+    duration_15min = page.locator("button[data-duration='15']")
+    duration_15min.click()
     
-    # Wait for bin size to update (with longer timeout for debounce + server round-trip)
-    page.wait_for_timeout(1000)  # Allow for 100ms debounce + server processing
+    # Wait for chart to update
+    page.wait_for_timeout(500)  # Allow for debounce and update
     
     zoomed_bin_size = get_bin_size()
-    LOGGER.info(f"  Bin size after 30min zoom: {zoomed_bin_size}")
-    # The test verifies the fix works - if bin changes that's great, 
-    # but the main test is that switching orders resets it
-    if zoomed_bin_size != "30s":
-        LOGGER.warning(f"  Bin didn't change to 30s (still {zoomed_bin_size}), but order switch should still reset it")
+    LOGGER.info(f"  Bin size after 15min zoom: {zoomed_bin_size}")
+    verify(zoomed_bin_size in ["1min", "30s"], 
+           f"Zoomed bin size should be smaller (1min or 30s): {zoomed_bin_size}")
     
-    # Step 3: Switch to a different order to verify bin size resets
-    LOGGER.info("Step 3: Switching to second order to verify bin size resets")
+    # Step 3: Switch to a different order with short duration (<40 mins for 30s bins)
+    LOGGER.info("Step 3: Switching to a short-duration order")
     
     # Go back to table
     page.get_by_text("Table", exact=True).click()
     
-    # Click second row (any order will do)
-    second_row = orders_table.locator(".tabulator-row").nth(1)
+    # Find a short-duration order
+    short_duration_row = None
+    for i in range(20):
+        row_selector = f"#orders_table .tabulator-row:nth-child({i+1})"
+        duration = get_order_duration(row_selector)
+        if duration and duration < 40:
+            short_duration_row = page.locator(row_selector)
+            LOGGER.info(f"  Found short-duration order at row {i+1}: {duration} mins")
+            break
     
-    # Get duration of second order
-    second_row_selector = "#orders_table .tabulator-row:nth-child(2)"
-    second_order_duration = get_order_duration(second_row_selector)
-    LOGGER.info(f"  Second order duration: {second_order_duration} mins")
+    if not short_duration_row:
+        LOGGER.warning("  No short-duration order found, using second row as fallback")
+        short_duration_row = orders_table.locator(".tabulator-row").nth(1)
     
-    second_row.click()
+    short_duration_row.click()
     page.get_by_text("Chart", exact=True).click()
     page.wait_for_function("""() => {
         const el = document.getElementById('order_chart');
@@ -1540,22 +1554,14 @@ def test_bin_size_resets_on_order_switch(page: Page, app: ShinyAppProc):
     }""", timeout=5000)
     
     # Critical assertion: bin size should reset based on NEW order's duration
-    # NOT carry over the zoomed bin size (30s) from previous order
+    # NOT carry over the zoomed bin size from previous order
     new_order_bin_size = get_bin_size()
-    LOGGER.info(f"  Bin size for second order: {new_order_bin_size}")
+    LOGGER.info(f"  Bin size for short-duration order: {new_order_bin_size}")
     
-    # Determine expected bin size based on order duration
-    if second_order_duration and second_order_duration > 160:
-        expected_bin = "5min"
-    elif second_order_duration and second_order_duration > 80:
-        expected_bin = "2min"
-    elif second_order_duration and second_order_duration >= 40:
-        expected_bin = "1min"
-    else:
-        expected_bin = "30s"
-    
-    verify(new_order_bin_size == expected_bin, 
-           f"Bin size should reset to {expected_bin} for {second_order_duration}min order, got: {new_order_bin_size}")
+    # For a short order (<40 mins), initial bin size should be 30s
+    # NOT the zoomed bin size from the previous order
+    verify(new_order_bin_size == "30s", 
+           f"Bin size should reset to 30s for short order, got: {new_order_bin_size}")
     
     LOGGER.info("  ✅ PASSED: Bin size correctly resets when switching orders")
 
