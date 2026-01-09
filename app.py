@@ -531,8 +531,8 @@ def server(input, output, session):
         logger.info(f"[chart_button] Computed y_range: {y_range}")
         
         if new_bin_size != current_bin_size:
-            # Bin size change needed - regenerate chart with new bins
-            logger.info(f"[chart_button] Bin size change: {current_bin_size} -> {new_bin_size}")
+            # Bin size change needed - efficiently update only volume traces
+            logger.info(f"[chart_button] 🚀 Efficient bin size change: {current_bin_size} -> {new_bin_size}")
             
             is_dark = input.dark_mode() == "dark"
             theme_colors = {
@@ -543,6 +543,7 @@ def server(input, output, session):
                 "danger": shiny_theme.colors.danger,
             }
             
+            # Generate new figure to get updated volume traces with new bins
             fig = create_order_viz(
                 data_service=cached_data_service,
                 date=date,
@@ -559,30 +560,46 @@ def server(input, output, session):
                 exch_close_time=exch_close_time,
             )
             
-            # Update widget atomically with new traces, x-range, and y-range
+            # EFFICIENT UPDATE: Only replace volume traces (same as _update_order_chart)
+            volume_trace_names = {"Lit Volume", "Dark Volume", "PRate"}
+            
             with widget.batch_update():
-                widget.data = []
+                # Remove old volume traces (in reverse order to preserve indices)
+                indices_to_remove = []
+                for i, trace in enumerate(widget.data):
+                    if hasattr(trace, 'name') and trace.name in volume_trace_names:
+                        indices_to_remove.append(i)
+                
+                for i in reversed(indices_to_remove):
+                    widget.data = list(widget.data[:i]) + list(widget.data[i+1:])
+                
+                logger.info(f"[chart_button] Removed {len(indices_to_remove)} old volume traces")
+                
+                # Add new volume traces from the figure
+                new_volume_traces = []
                 for trace in fig.data:
-                    widget.add_trace(trace)
+                    if hasattr(trace, 'name') and trace.name in volume_trace_names:
+                        new_volume_traces.append(trace)
+                        widget.add_trace(trace)
                 
-                for key in fig.layout:
-                    try:
-                        setattr(widget.layout, key, fig.layout[key])
-                    except (AttributeError, ValueError):
-                        pass
+                logger.info(f"[chart_button] Added {len(new_volume_traces)} new volume traces")
                 
-                # Ensure ranges are applied
+                # Update axis ranges atomically with volume traces
                 widget.layout.xaxis.range = target_range
                 widget.layout.xaxis2.range = target_range
                 widget.layout.xaxis3.range = target_range
                 if y_range:
                     widget.layout.yaxis.range = y_range
                     widget.layout.yaxis.autorange = False
+                
+                # Update metadata (contains binSize info)
+                if hasattr(fig.layout, 'meta'):
+                    widget.layout.meta = fig.layout.meta
             
             # Update last state
             _last_chart_state["bin_size"] = new_bin_size
             
-            logger.info(f"[chart_button] Full chart update completed with new bin size")
+            logger.info(f"[chart_button] Efficient volume+range update completed")
         else:
             # Same bin size - just update x-range and y-range
             logger.info(f"[chart_button] Same bin size, updating ranges only")
