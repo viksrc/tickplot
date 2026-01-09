@@ -2,15 +2,12 @@
 import os
 import logging
 import re
-import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
 from chatlas import ChatOpenRouter
 from typing import Any, Callable, Optional, Union
 import json
 import dotenv
-import sys
 
 dotenv.load_dotenv()
 

@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from shinyswatch.theme import lumen as shiny_theme
 from pytabulator import (
     output_tabulator,
     render_tabulator,
 )
 from shiny import App, render, ui, reactive
-from shinywidgets import output_widget, render_widget, render_plotly
+from shinywidgets import output_widget, render_plotly
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 from starlette.routing import Mount, Route
 
 from data_service import DataService
@@ -24,7 +22,6 @@ import tables
 from nl_service import NLService
 from databot_service import DatabotService
 import dotenv
-import os
 import logging
 
 # Configure logging
@@ -632,12 +629,12 @@ def server(input, output, session):
                         widget.data[lit_trace_idx].y = new_trace.y
                         widget.data[lit_trace_idx].customdata = new_trace.customdata
                         widget.data[lit_trace_idx].hovertext = new_trace.hovertext
-                        logger.info(f"[chart_button] Updated Lit Volume trace in place")
+                        logger.info("[chart_button] Updated Lit Volume trace in place")
                     elif new_trace.name == "Dark Volume" and dark_trace_idx is not None:
                         widget.data[dark_trace_idx].x = new_trace.x
                         widget.data[dark_trace_idx].y = new_trace.y
                         widget.data[dark_trace_idx].customdata = new_trace.customdata
-                        logger.info(f"[chart_button] Updated Dark Volume trace in place")
+                        logger.info("[chart_button] Updated Dark Volume trace in place")
                 
                 # Update layout (ranges and metadata)
                 widget.layout.xaxis.range = target_range
@@ -657,10 +654,10 @@ def server(input, output, session):
             # Update last state
             _last_chart_state["bin_size"] = new_bin_size
             
-            logger.info(f"[chart_button] Efficient volume+range update completed")
+            logger.info("[chart_button] Efficient volume+range update completed")
         else:
             # Same bin size - just update x-range and y-range
-            logger.info(f"[chart_button] Same bin size, updating ranges only")
+            logger.info("[chart_button] Same bin size, updating ranges only")
             
             with widget.batch_update():
                 widget.layout.xaxis.range = target_range
@@ -670,7 +667,7 @@ def server(input, output, session):
                     widget.layout.yaxis.range = y_range
                     widget.layout.yaxis.autorange = False
             
-            logger.info(f"[chart_button] Range-only update completed")
+            logger.info("[chart_button] Range-only update completed")
 
     @reactive.calc
     def current_order_enriched():
@@ -973,7 +970,7 @@ def server(input, output, session):
             saved_key = state.get("orderKey")
             if saved_range and len(saved_range) == 2 and saved_key == current_order_key:
                 x_range = saved_range
-                logger.info(f"Using saved x_range from state")
+                logger.info("Using saved x_range from state")
 
         # Generate the figure
         theme_colors = {

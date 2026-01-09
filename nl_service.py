@@ -1,8 +1,8 @@
 import os
 import polars as pl
 from pathlib import Path
-from chatlas import ChatOpenRouter, ChatOpenAI
-from typing import Any, Callable, Awaitable
+from chatlas import ChatOpenRouter
+from typing import Any, Callable
 import dotenv
 
 dotenv.load_dotenv()

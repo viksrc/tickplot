@@ -242,7 +242,7 @@ def test_order_visualizer_navigation(page: Page, app: ShinyAppProc):
     # End date is already 2025-01-03
     page.locator("#query_btn").click()
     # Wait for table to refresh (checking for specific date ensures we waited)
-    page.locator(f".tabulator-row:has-text('2025.01.03')").first.wait_for()
+    page.locator(".tabulator-row:has-text('2025.01.03')").first.wait_for()
 
     verify_order_components("2025.01.03")
 @pytest.mark.anyio
@@ -1208,7 +1208,7 @@ def test_15min_duration_button_from_first(page: Page, app: ShinyAppProc):
         init_end_mins = int(init_end_parts[0]) * 60 + int(init_end_parts[1])
         init_duration = init_end_mins - init_start_mins
         LOGGER.info(f"  Initial duration: {init_duration} minutes (from {init_start_parts[0]}:{init_start_parts[1]} to {init_end_parts[0]}:{init_end_parts[1]})")
-        LOGGER.info(f"  This is the default view with padding based on order duration")
+        LOGGER.info("  This is the default view with padding based on order duration")
     
     # Verify the event handler is attached by checking if _hasRescaling flag is set
     has_rescaling = page.evaluate('''() => {
@@ -1261,9 +1261,9 @@ def test_15min_duration_button_from_first(page: Page, app: ShinyAppProc):
     if start_mins == 9 * 60 + 30:  # 570 minutes = 9:30
         expected_end = 9 * 60 + 45  # 585 minutes = 9:45
         verify(abs(end_mins - expected_end) <= 2, f"For 9:30 start, ends at ~9:45 (got {end_parts[0]}:{end_parts[1]})")
-        LOGGER.info(f"  ✅ PASSED: 15m button shows 9:30-9:45 range")
+        LOGGER.info("  ✅ PASSED: 15m button shows 9:30-9:45 range")
     else:
-        LOGGER.info(f"  ✅ PASSED: 15m button shows correct 15-minute duration")
+        LOGGER.info("  ✅ PASSED: 15m button shows correct 15-minute duration")
 
 
 @pytest.mark.anyio
@@ -1331,7 +1331,7 @@ def test_all_button_includes_auction_bars(page: Page, app: ShinyAppProc):
     default_range = chart_data.get("defaultRange")
     bin_size = chart_data.get("binSize")
     
-    LOGGER.info(f"  After 'All' click:")
+    LOGGER.info("  After 'All' click:")
     LOGGER.info(f"    - Current x-axis range: {x_range}")
     LOGGER.info(f"    - defaultRange in meta: {default_range}")
     LOGGER.info(f"    - binSize in meta: {bin_size}")
@@ -1425,7 +1425,7 @@ def test_all_button_includes_auction_bars(page: Page, app: ShinyAppProc):
     verify(range_end_mins > market_close_mins, 
            f"X-axis end ({end_time_str}) is after market close 16:00 (includes Close auction bar)")
     
-    LOGGER.info(f"  ✅ PASSED: 'All' button correctly includes Open and Close auction bars (verified in both range AND trace data)")
+    LOGGER.info("  ✅ PASSED: 'All' button correctly includes Open and Close auction bars (verified in both range AND trace data)")
 
 
 @pytest.mark.anyio
