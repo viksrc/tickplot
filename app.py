@@ -503,6 +503,8 @@ def server(input, output, session):
             # Recalculate default range with the correct bin size for "all" view
             all_start_secs, all_end_secs = calc_default_range(all_bin_secs)
             target_range = [secs_to_iso(all_start_secs), secs_to_iso(all_end_secs)]
+            # For "all", the target IS the new default, so update it
+            default_x_range = target_range
             logger.info(f"[chart_button] All button: recalculated range with bin_size={all_bin_size}")
         
         if not target_range:

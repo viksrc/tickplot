@@ -1370,12 +1370,54 @@ def test_all_button_includes_auction_bars(page: Page, app: ShinyAppProc):
     market_open_mins = 9 * 60 + 30   # 9:30 = 570 mins
     market_close_mins = 16 * 60      # 16:00 = 960 mins
     
-    # CRITICAL: Verify the defaultRange in metadata is correct!
-    # This is what the All button reads from, so if this is wrong, All won't work
-    verify(default_start_mins < market_open_mins, 
-           f"defaultRange start ({default_start_str}) must be before market open 9:30 (includes Open auction bar)")
-    verify(default_end_mins > market_close_mins, 
-           f"defaultRange end ({default_end_str}) must be after market close 16:00 (includes Close auction bar)")
+    # ROBUST CHECK: Verify the range extends by AT LEAST the bin size
+    # For a full-day view, bin_size should be 5min (300 seconds)
+    verify(bin_size == "5min", f"All button for full day should use 5min bins, got {bin_size}")
+    
+    expected_bin_mins = 5  # 5 minutes for full day
+    
+    # Check that the range extends by at least the bin size (with small tolerance)
+    open_extension = market_open_mins - default_start_mins
+    close_extension = default_end_mins - market_close_mins
+    
+    LOGGER.info(f"  Open extension: {open_extension:.1f} mins (expected: >={expected_bin_mins} mins)")
+    LOGGER.info(f"  Close extension: {close_extension:.1f} mins (expected: >={expected_bin_mins} mins)")
+    
+    verify(open_extension >= expected_bin_mins - 0.1, 
+           f"defaultRange must extend at least {expected_bin_mins} mins before market open for Open auction bar. Got {open_extension:.1f} mins")
+    verify(close_extension >= expected_bin_mins - 0.1, 
+           f"defaultRange must extend at least {expected_bin_mins} mins after market close for Close auction bar. Got {close_extension:.1f} mins")
+    
+    # CRITICAL: Check that the auction bar DATA is actually present in the traces
+    auction_data = page.evaluate('''() => {
+        const gd = document.querySelector("#order_chart .js-plotly-plot");
+        if (!gd || !gd.data) return null;
+        
+        // Find Lit Volume trace (contains auction bars)
+        const litTrace = gd.data.find(t => t.name === "Lit Volume");
+        if (!litTrace || !litTrace.customdata) return {error: "No Lit Volume trace or customdata"};
+        
+        // Check if Open and Close labels exist in customdata
+        const labels = litTrace.customdata;
+        const hasOpen = labels.some(label => label === "Open");
+        const hasClose = labels.some(label => label === "Close");
+        
+        return {
+            totalBars: litTrace.x ? litTrace.x.length : 0,
+            hasOpen: hasOpen,
+            hasClose: hasClose,
+            firstLabel: labels[0],
+            lastLabel: labels[labels.length - 1],
+            allLabels: labels.slice(0, 5).concat(['...'], labels.slice(-5))  // First 5 and last 5 for debugging
+        };
+    }''')
+    
+    LOGGER.info(f"  Auction bar data check: {auction_data}")
+    
+    verify(auction_data is not None, "Auction data is available")
+    verify(not auction_data.get("error"), f"Trace data error: {auction_data.get('error')}")
+    verify(auction_data.get("hasOpen"), "Open auction bar is present in trace data")
+    verify(auction_data.get("hasClose"), "Close auction bar is present in trace data")
     
     # Verify the actual displayed x-axis range is also correct
     verify(range_start_mins < market_open_mins, 
@@ -1383,5 +1425,5 @@ def test_all_button_includes_auction_bars(page: Page, app: ShinyAppProc):
     verify(range_end_mins > market_close_mins, 
            f"X-axis end ({end_time_str}) is after market close 16:00 (includes Close auction bar)")
     
-    LOGGER.info(f"  ✅ PASSED: 'All' button correctly includes Open and Close auction bars")
+    LOGGER.info(f"  ✅ PASSED: 'All' button correctly includes Open and Close auction bars (verified in both range AND trace data)")
 
