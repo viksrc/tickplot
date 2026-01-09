@@ -74,6 +74,45 @@ function resizeAllPlotly() {
     function _bindRescaling(graphDiv) {
         if (!graphDiv || typeof graphDiv.on !== 'function') return; // Plotly hasn't enhanced it yet.
 
+        // Helper to update button visual selection state
+        function _updateButtonSelectionUI() {
+            if (!graphDiv.layout?.updatemenus?.[0]?.buttons) return;
+            
+            const buttons = graphDiv.layout.updatemenus[0].buttons;
+            const anchor = graphDiv._anchor || "first";
+            const duration = graphDiv._selectedDuration;
+            
+            buttons.forEach((btn, idx) => {
+                const args = btn.args?.[0];
+                if (!args || !args.action) return;
+                
+                let isActive = false;
+                if (args.action === "anchor") {
+                    isActive = (args.anchor === anchor);
+                } else if (args.action === "duration") {
+                    isActive = (args.mins === duration);
+                }
+                
+                // Update button styling
+                if (isActive) {
+                    btn.bgcolor = "#90EE90";
+                    btn.font = { color: "black", weight: 600 };
+                } else {
+                    btn.bgcolor = null;
+                    btn.font = null;
+                }
+            });
+            
+            // Apply the layout update
+            try {
+                if (window.Plotly && Plotly.update) {
+                    Plotly.update(graphDiv, {}, { 'updatemenus[0].buttons': buttons });
+                }
+            } catch (e) {
+                // noop
+            }
+        }
+
         // Always update order key from metadata (order can change without rebind)
         const newOrderKey = graphDiv.layout?.meta?.orderKey;
         if (newOrderKey && newOrderKey !== graphDiv._currentOrderKey) {
@@ -83,6 +122,9 @@ function resizeAllPlotly() {
             const savedState = storedState ? JSON.parse(storedState) : null;
             graphDiv._anchor = savedState?.anchor || "first";
             graphDiv._selectedDuration = savedState?.duration || null;
+            
+            // Update button visual state to match reset state
+            setTimeout(() => _updateButtonSelectionUI(), 50);
         }
 
         // Only bind event handlers once
@@ -173,6 +215,11 @@ function resizeAllPlotly() {
 
             // Save state for persistence across re-renders
             _saveButtonState();
+            
+            // Update button visual selection (defined in _bindRescaling scope)
+            if (typeof _updateButtonSelectionUI === 'function') {
+                _updateButtonSelectionUI();
+            }
 
             // Send button action to server - server will compute range and update chart atomically
             if (window.Shiny) {
