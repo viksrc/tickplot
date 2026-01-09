@@ -397,14 +397,18 @@ def server(input, output, session):
         
         # Get current bin size from widget metadata
         current_bin_size = widget.layout.meta.get("binSize", "5min") if widget.layout.meta else "5min"
-        bin_seconds = {"5min": 300, "2min": 120, "1min": 60, "30s": 30}.get(current_bin_size, 300)
+        current_bin_seconds = {"5min": 300, "2min": 120, "1min": 60, "30s": 30}.get(current_bin_size, 300)
         
-        # Calculate default range (for "all" action)
-        duration = et_mins - st_mins
-        padding_mins = 30 if duration > 120 else (10 if duration > 20 else 5)
+        # Helper to calculate default range for a given bin size
+        def calc_default_range(bin_secs):
+            duration = et_mins - st_mins
+            padding_mins = 30 if duration > 120 else (10 if duration > 20 else 5)
+            start_secs = max((eo_mins * 60) - bin_secs, (st_mins - padding_mins) * 60)
+            end_secs = min((et_mins + padding_mins) * 60, (ec_mins * 60) + bin_secs)
+            return start_secs, end_secs
         
-        default_start_secs = max((eo_mins * 60) - bin_seconds, (st_mins - padding_mins) * 60)
-        default_end_secs = min((et_mins + padding_mins) * 60, (ec_mins * 60) + bin_seconds)
+        # Calculate initial default range with current bin size
+        default_start_secs, default_end_secs = calc_default_range(current_bin_seconds)
         
         def secs_to_iso(secs):
             h, rem = divmod(secs, 3600)
@@ -422,6 +426,12 @@ def server(input, output, session):
         mins = btn.get("mins")
         
         target_range = None
+        
+        # Helper to convert ISO string to epoch milliseconds
+        def to_epoch_ms(iso_str):
+            from datetime import datetime
+            dt = datetime.fromisoformat(iso_str.replace(" ", "T"))
+            return dt.timestamp() * 1000
         
         if action == "anchor":
             # Anchor button - if duration was selected, apply it from new anchor
@@ -469,7 +479,31 @@ def server(input, output, session):
                 target_range = [eff_start, secs_to_iso(target_end_secs)]
                 
         elif action == "all":
-            target_range = default_x_range
+            # For "all", use default range - but need to determine bin size first
+            # Use a temporary range to calculate bin size
+            temp_range = default_x_range
+            temp_t_start = to_epoch_ms(temp_range[0])
+            temp_t_end = to_epoch_ms(temp_range[1])
+            temp_range_mins = (temp_t_end - temp_t_start) / 60000
+            
+            # Determine bin size for the full range
+            if temp_range_mins > 160: 
+                all_bin_size = "5min"
+                all_bin_secs = 300
+            elif temp_range_mins > 80: 
+                all_bin_size = "2min"
+                all_bin_secs = 120
+            elif temp_range_mins >= 40: 
+                all_bin_size = "1min"
+                all_bin_secs = 60
+            else: 
+                all_bin_size = "30s"
+                all_bin_secs = 30
+            
+            # Recalculate default range with the correct bin size for "all" view
+            all_start_secs, all_end_secs = calc_default_range(all_bin_secs)
+            target_range = [secs_to_iso(all_start_secs), secs_to_iso(all_end_secs)]
+            logger.info(f"[chart_button] All button: recalculated range with bin_size={all_bin_size}")
         
         if not target_range:
             logger.warning(f"[chart_button] Could not compute target_range for action={action}")
@@ -478,10 +512,6 @@ def server(input, output, session):
         logger.info(f"[chart_button] Computed target_range: {target_range}")
         
         # Determine if bin size change is needed
-        def to_epoch_ms(iso_str):
-            from datetime import datetime
-            dt = datetime.fromisoformat(iso_str.replace(" ", "T"))
-            return dt.timestamp() * 1000
         
         t_start = to_epoch_ms(target_range[0])
         t_end = to_epoch_ms(target_range[1])
