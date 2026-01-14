@@ -766,6 +766,7 @@ def server(input, output, session):
             tables.create_perf_chip("PerfVWAP", float(order_detail.get("PerfVWAP", 0.0))),
             tables.create_perf_chip("PerfClose", float(order_detail.get("PerfClose", 0.0))),
             tables.create_perf_chip("SpreadCapture", spread_capture_pct, is_percentage=True, percentage_decimals=1),
+            tables.create_perf_chip("Rev10m", float(order_detail.get("Rev10m", float("nan"))), invert_colors=True),
             class_="d-flex gap-2 justify-content-start px-2 py-1",
         )
 

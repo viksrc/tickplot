@@ -9,10 +9,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+import logging
 
 import numpy as np
 import pandas as pd
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 
 class DataServiceInterface(ABC):
@@ -761,7 +764,7 @@ class DataService(DataServiceInterface):
         )
         
         # Calculate derived metrics
-        analytics = self._calculate_analytics(exec_df, price_df)
+        analytics = self._calculate_analytics(exec_df, price_df, order_detail)
 
         # Enrich the order dictionary
         enriched_order = {**order_detail, **analytics}
@@ -770,13 +773,14 @@ class DataService(DataServiceInterface):
             "order": enriched_order,
         }
 
-    def _calculate_analytics(self, exec_df: pd.DataFrame, price_df: pd.DataFrame) -> dict[str, Any]:
+    def _calculate_analytics(self, exec_df: pd.DataFrame, price_df: pd.DataFrame, order_detail: dict[str, Any]) -> dict[str, Any]:
         """Perform all quantitative calculations based on both execution and market data."""
         if len(exec_df) == 0:
             return {
                 "FillSize": 0,
                 "SpreadCapture": float("nan"),
                 "AvgPrice": float("nan"),
+                "Rev10m": float("nan"),
             }
 
         fill_size = int(round(float(exec_df["Size"].mean())))
@@ -791,13 +795,61 @@ class DataService(DataServiceInterface):
             spread_capture_pct = float("nan")
             avg_price = float("nan")
 
+        # Calculate Rev10m: reversion 10 minutes after order end
+        rev10m = self._calculate_rev10m(price_df, order_detail)
+
         return {
             "FillSize": fill_size,
             "SpreadCapture": spread_capture_pct,
             "AvgPrice": avg_price,
+            "Rev10m": rev10m,
             # Placeholder for future analytics: 
             # "MarketParticipation": total_qty / price_df['Volume'].sum() if not price_df.empty else 0
         }
+
+    def _calculate_rev10m(self, price_df: pd.DataFrame, order_detail: dict[str, Any]) -> float:
+        """Calculate Rev10m: 10000 * SideSign * (MidPrice(EndTime) - MidPrice(EndTime+10min)) / MidPrice(EndTime)"""
+        try:
+            end_time_str = order_detail.get("EndTime", "")
+            side = order_detail.get("Side", "")
+            date = order_detail.get("Date", "")
+            
+            if not end_time_str or not side or not date or price_df.empty:
+                return float("nan")
+            
+            # Parse EndTime and calculate EndTime + 10 minutes
+            end_time_dt = pd.to_datetime(f"{date} {end_time_str}:00")
+            end_time_plus_10 = end_time_dt + pd.Timedelta(minutes=10)
+            
+            # Calculate MidPrice (Bid + Ask) / 2
+            price_df = price_df.copy()
+            price_df["MidPrice"] = (price_df["Bid"] + price_df["Ask"]) / 2.0
+            
+            # Get MidPrice at EndTime (closest available time)
+            idx_end = price_df["Time"].searchsorted(end_time_dt, side="left")
+            if idx_end >= len(price_df):
+                idx_end = len(price_df) - 1
+            mid_at_end = price_df.iloc[idx_end]["MidPrice"]
+            
+            # Get MidPrice at EndTime + 10 minutes (closest available time)
+            idx_end_plus_10 = price_df["Time"].searchsorted(end_time_plus_10, side="left")
+            if idx_end_plus_10 >= len(price_df):
+                # If 10 minutes after end is beyond available data, use last available price
+                idx_end_plus_10 = len(price_df) - 1
+            mid_at_end_plus_10 = price_df.iloc[idx_end_plus_10]["MidPrice"]
+            
+            # SideSign: +1 for Buy, -1 for Sell
+            side_sign = 1.0 if side == "Buy" else -1.0
+            
+            # Rev10m = 10000 * SideSign * (MidPrice(EndTime) - MidPrice(EndTime+10min)) / MidPrice(EndTime)
+            if mid_at_end != 0:
+                rev10m = 10000.0 * side_sign * (mid_at_end - mid_at_end_plus_10) / mid_at_end
+                return float(rev10m)
+            else:
+                return float("nan")
+        except Exception as e:
+            logger.warning(f"Error calculating Rev10m: {e}")
+            return float("nan")
 
     def get_prices(
         self, date: str, ticker: str,

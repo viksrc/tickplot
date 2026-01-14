@@ -30,7 +30,7 @@ def format_display_date(value: object) -> str:
 
 
 
-def create_perf_chip(label: str, value: float, is_percentage: bool = False, percentage_decimals: int = 2):
+def create_perf_chip(label: str, value: float, is_percentage: bool = False, percentage_decimals: int = 2, invert_colors: bool = False):
     """
     Create a styled performance chip (pill) for display in UI.
     
@@ -40,6 +40,7 @@ def create_perf_chip(label: str, value: float, is_percentage: bool = False, perc
         is_percentage: If True, format as %, and positive is Good (Green).
                        If False, format as bps, and positive is Bad (Red).
         percentage_decimals: Number of decimals for percentage formatting.
+        invert_colors: If True, invert the color logic (positive=good for bps metrics).
     """
     # Handle missing/NaN values
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -64,12 +65,21 @@ def create_perf_chip(label: str, value: float, is_percentage: bool = False, perc
         value_str = f"{value:.{percentage_decimals}f}%"
     else:
         # For Perf metrics (Arrival, VWAP, etc): positive is bad (slippage), negative is good (improvement)
-        if value > 0:
-            color = "danger"
-        elif value < 0:
-            color = "success"
+        # Unless invert_colors=True (for Rev10m): positive is good (favorable reversion)
+        if invert_colors:
+            # Inverted: positive/zero = good (green), negative = bad (red)
+            if value >= 0:
+                color = "success"
+            else:
+                color = "danger"
         else:
-            color = "secondary"
+            # Standard: positive = bad (red), negative = good (green)
+            if value > 0:
+                color = "danger"
+            elif value < 0:
+                color = "success"
+            else:
+                color = "secondary"
         value_str = f"{value:+.1f} bps"
 
     return ui.span(
