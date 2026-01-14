@@ -23,6 +23,7 @@ from nl_service import NLService
 from databot_service import DatabotService
 import dotenv
 import logging
+from typing import Final
 
 # Configure logging
 logging.basicConfig(
@@ -54,6 +55,20 @@ You can use this sidebar to filter and sort orders based on the columns availabl
 
 You can also say <span class="suggestion">Reset</span> to clear filters, or <span class="suggestion">Help</span> for more tips.
 """
+
+# Map model IDs to friendly display names
+DATABOT_MODEL_LABELS: Final[dict[str, str]] = {
+    "deepseek/deepseek-v3.1-terminus": "DeepSeek (current)",
+    "deepseek/deepseek-v3.2": "DeepSeek v3.2",
+    "z-ai/glm-4.6": "GLM 4.6",
+    "z-ai/glm-4.7": "GLM 4.7",
+}
+
+# Build choices dict for input_selectize: {model_id: display_label}
+DATABOT_MODEL_CHOICES: Final[dict[str, str]] = DATABOT_MODEL_LABELS
+
+# Default to GLM 4.7 as requested; user can switch any time.
+DEFAULT_DATABOT_MODEL: Final[str] = "z-ai/glm-4.7"
 
 app_ui = ui.page_navbar(
     ui.nav_panel(
@@ -130,6 +145,14 @@ app_ui = ui.page_navbar(
         "Databot",
         ui.layout_sidebar(
             ui.sidebar(
+                ui.input_selectize(
+                    "databot_model",
+                    "Model",
+                    choices=DATABOT_MODEL_CHOICES,
+                    selected=DEFAULT_DATABOT_MODEL,
+                    options={"placeholder": "Select a model..."},
+                ),
+                ui.hr(),
                 ui.chat_ui("databot_chat", height="600px"),
                 width=400,
                 title="Databot Chat"
@@ -1124,21 +1147,42 @@ def server(input, output, session):
     
     # Reactive value to hold the generated plot
     databot_fig = reactive.Value(None)
-    
-    # Initialize Databot Service with session ID
-    databot_service = DatabotService(DATA_SERVICE, session_id=session.id)
+
+    # Model-scoped Databot service instances (per Shiny session)
+    databot_services: dict[str, DatabotService] = {}
+    databot_tools_registered: set[str] = set()
     
     # Callback to update the plot from the tool
     async def update_databot_plot(fig):
         async with reactive.lock():
             databot_fig.set(fig)
             await reactive.flush()
-        
-    databot_service.register_plot_callback(update_databot_plot)
-    
+
+
+    async def get_databot_service(model: str) -> DatabotService:
+        """Get a DatabotService for a given model, registering tools once."""
+        if not model:
+            model = DEFAULT_DATABOT_MODEL
+
+        if model not in databot_services:
+            svc = DatabotService(DATA_SERVICE, session_id=session.id, model=model)
+            svc.register_plot_callback(update_databot_plot)
+            databot_services[model] = svc
+
+        svc = databot_services[model]
+        if model not in databot_tools_registered:
+            await svc.register_tools()
+            databot_tools_registered.add(model)
+
+        return svc
+
     @reactive.Effect
-    async def _register_databot_tools():
-        await databot_service.register_tools()
+    async def _prewarm_default_databot_tools():
+        # Avoid first-message latency by registering tools once at session start.
+        try:
+            await get_databot_service(DEFAULT_DATABOT_MODEL)
+        except Exception as e:
+            logger.warning(f"Databot tool prewarm failed: {e}")
     
     databot_chat = ui.Chat("databot_chat")
     
@@ -1146,7 +1190,10 @@ def server(input, output, session):
     async def perform_databot_chat(user_input: str):
         if not user_input:
             return
-        await databot_service.perform_chat(user_input, databot_chat)
+
+        model = input.databot_model()
+        svc = await get_databot_service(model)
+        await svc.perform_chat(user_input, databot_chat)
 
     @render.ui
     def databot_display():

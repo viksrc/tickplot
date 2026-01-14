@@ -63,7 +63,8 @@ body {
 }
 
 /* Tabulator uses an internal table that can overshoot by a few px due to borders/scrollbars.
-   Hide x overflow but keep y scrolling behavior intact. */
+   Hide x overflow but keep y scrolling behavior intact for detail tables.
+   Allow horizontal scroll for orders_table. */
 #order_details_table .tabulator-tableholder,
 #venue_table .tabulator-tableholder,
 #fill_detail_table .tabulator-tableholder {
@@ -71,7 +72,7 @@ body {
 }
 
 #orders_table .tabulator-tableholder {
-    overflow-x: hidden !important;
+    overflow-x: auto !important;
 }
 
 #order_details_table .tabulator-table,
@@ -81,9 +82,9 @@ body {
     max-width: 100% !important;
 }
 
+/* Allow orders_table to expand beyond container for horizontal scroll */
 #orders_table .tabulator-table {
-    width: 100% !important;
-    max-width: 100% !important;
+    min-width: 100% !important;
 }
 
 /* Add right padding to right-aligned cells in chart tables */

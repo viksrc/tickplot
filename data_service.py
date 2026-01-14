@@ -537,6 +537,11 @@ class DataService(DataServiceInterface):
             
         if "orderid" not in self.base_orders.columns:
             raise ValueError("base_orders must include an 'orderid' column")
+        
+        # Add Notional column if missing (for backward compatibility)
+        if "Notional" not in self.base_orders.columns:
+            self.base_orders = self.base_orders.with_columns(pl.lit(0).alias("Notional"))
+            
         if self.base_orders["orderid"].is_duplicated().any():
             raise ValueError("base_orders.orderid must be unique")
 
@@ -653,6 +658,23 @@ class DataService(DataServiceInterface):
                 "PerfClose": rng.normal(0, 2, size=num_orders).round(1).clip(-5, 5),
             }
         )
+        
+        # Generate initial Notional using random AvgPrice in same range as fills
+        # (will be updated with actual values after fills are generated)
+        notional_values = []
+        for i in range(num_orders):
+            ticker = tickers[i]
+            exec_qty = base_orders["ExecQty"].iloc[i]
+            # Use same seed logic as _generate_stock_and_execution_data
+            ticker_seed = sum(ord(c) for c in ticker) * 42
+            ticker_rng = np.random.default_rng(ticker_seed + 999)  # Different offset to avoid correlation
+            base_price = 50 + (ticker_seed % 400)
+            # Add some variation similar to execution price logic
+            avg_price = base_price + ticker_rng.uniform(-5, 5)
+            notional = int(exec_qty * avg_price)
+            notional_values.append(notional)
+        
+        base_orders["Notional"] = notional_values
 
         return cls(base_orders=base_orders)
 
@@ -826,6 +848,17 @@ class DataService(DataServiceInterface):
             exch_close_time=exch_close,
             country=str(rec.get("Country", "US")),
         )
+
+        # Update Notional in base_orders with actual sum(Price * Size) from fills
+        if not exec_df.empty and "Price" in exec_df.columns and "Size" in exec_df.columns:
+            actual_notional = int((exec_df["Price"] * exec_df["Size"]).sum())
+            # Update in base_orders (note: this mutates the DataFrame, but it's acceptable for caching)
+            self.base_orders = self.base_orders.with_columns(
+                pl.when(pl.col("orderid") == str(orderid))
+                .then(pl.lit(actual_notional))
+                .otherwise(pl.col("Notional"))
+                .alias("Notional")
+            )
 
         self._exec_cache[key] = exec_df
         return exec_df.copy()

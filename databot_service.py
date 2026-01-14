@@ -14,7 +14,7 @@ dotenv.load_dotenv()
 logger = logging.getLogger(__name__)
 
 class DatabotService:
-    def __init__(self, data_service: Any, session_id: str = "", model: str = "deepseek/deepseek-v3.1-terminus"):
+    def __init__(self, data_service: Any, session_id: str = "", model: str = "deepseek/deepseek-v3.2"):
         self.data_service = data_service
         self.session_id = session_id
         self.model = model
@@ -45,13 +45,74 @@ class DatabotService:
             
         with open(prompt_path, "r") as f:
             content = f.read()
+
+        # Render template variables ({{ ... }})
+        schema = self._build_schema_text("orders")
+        variables = {
+            "SCHEMA": schema,
+            "SESSION_ID": self.session_id or "",
+        }
+
+        def _replace(match: re.Match[str]) -> str:
+            key = match.group(1).strip()
+            return variables.get(key, match.group(0))
+
+        content = re.sub(r"{{\s*([A-Z0-9_]+)\s*}}", _replace, content)
             
-        # Inject session context
-        if self.session_id:
-             content += f"\n\nSYSTEM CONTEXT:\nYour Session ID is: {self.session_id}\n"
-             content += f"Always allow this ID when fetching data: http://127.0.0.1:8000/orders?session_id={self.session_id}\n"
+        # Inject session context (only if not already provided via {{ SESSION_ID }})
+        if self.session_id and "SYSTEM CONTEXT:" not in content:
+            content += f"\n\nSYSTEM CONTEXT:\nYour Session ID is: {self.session_id}\n"
+            content += f"Always allow this ID when fetching data: http://127.0.0.1:8000/orders?session_id={self.session_id}\n"
+        
+        logger.info(f"DatabotService system prompt loaded (model={self.model}, session={self.session_id})")
+        logger.debug(f"DatabotService full prompt:\n{content[:500]}...")  # Log first 500 chars to avoid spam
              
         return content
+
+    def _build_schema_text(self, table_name: str) -> str:
+        """Build a simple schema block from the underlying data service.
+
+        This is intentionally similar to NLService's schema text, but kept local to avoid
+        coupling between NLService and DatabotService.
+        """
+
+        base_orders = getattr(self.data_service, "base_orders", None)
+        if base_orders is None:
+            return f"Table: {table_name}\nColumns:\n- (schema unavailable)"
+
+        # base_orders is typically a Polars DataFrame in this app.
+        try:
+            import polars as pl
+
+            if isinstance(base_orders, pl.DataFrame):
+                schema_lines = [f"Table: {table_name}", "Columns:"]
+                for col, dtype in base_orders.schema.items():
+                    sql_type = "TEXT"
+                    if dtype.is_integer():
+                        sql_type = "INTEGER"
+                    elif dtype.is_float():
+                        sql_type = "FLOAT"
+                    elif dtype == pl.Boolean:
+                        sql_type = "BOOLEAN"
+                    elif dtype == pl.Datetime:
+                        sql_type = "DATETIME"
+                    schema_lines.append(f"- {col} ({sql_type})")
+                return "\n".join(schema_lines)
+        except Exception:
+            # Fall through to generic schema below.
+            pass
+
+        # Generic fallback for pandas-like objects
+        try:
+            cols = list(getattr(base_orders, "columns", []))
+            if cols:
+                schema_lines = [f"Table: {table_name}", "Columns:"]
+                schema_lines.extend([f"- {c} (TEXT)" for c in cols])
+                return "\n".join(schema_lines)
+        except Exception:
+            pass
+
+        return f"Table: {table_name}\nColumns:\n- (schema unavailable)"
 
     def register_plot_callback(self, callback: Callable[[go.Figure], Any]):
         self._plot_callback = callback

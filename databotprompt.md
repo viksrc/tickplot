@@ -30,13 +30,12 @@ Don't run any code or tools in this first interaction--let the user make the fir
   - ✅ `pyfetch` - RECOMMENDED (async, handles large responses)
   - ⚠️ `requests` - Works but may truncate large responses (>8KB)
   - ❌ `pd.read_json(url)` - does NOT work
-  - ❌ `open_url` / `pyxhr` - do NOT work in Deno
 
 ## Data Schema
 
-The orders data available at `http://127.0.0.1:8000/orders` has the following structure:
+The orders data available at `http://127.0.0.1:8000/orders` . It has the scheam below:
 
-${SCHEMA}
+{{ SCHEMA }}
 
 ## Domain Knowledge
 
@@ -46,6 +45,7 @@ ${SCHEMA}
 - Negative values indicate the trade outperformed the benchmark
 - When users ask for "best" or "good" performance, filter for LOWER values
 - When users ask for "worst" or "bad" performance, filter for HIGHER values
+- Whean aggregating /averaging perfroamnce across  orders uses "Notional" column weighting
 
 * **Complete Script Example** (fetching + analysis + visualization in ONE script):
 
@@ -55,7 +55,7 @@ from pyodide.http import pyfetch
 import plotly.express as px
 
 # 1. FETCH DATA - Use session_id from context
-url = "http://127.0.0.1:8000/orders?session_id={session_id}"
+url = "http://127.0.0.1:8000/orders?session_id={{ SESSION_ID }}"
 response = await pyfetch(url)
 data = await response.json()
 df = pd.DataFrame(data)

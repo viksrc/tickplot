@@ -8,7 +8,7 @@ The user interface in which this conversation is being shown is a narrow sidebar
 
 You have at your disposal a Polars SQL engine containing this schema:
 
-${SCHEMA}
+{{ SCHEMA }}
 
 For security reasons, you may only query this specific table: `orders`.
 

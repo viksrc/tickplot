@@ -4,11 +4,14 @@ from pathlib import Path
 from chatlas import ChatOpenRouter
 from typing import Any, Callable
 import dotenv
+import logging
+import re
 
 dotenv.load_dotenv()
+logger = logging.getLogger(__name__)
 
 class NLService:
-    def __init__(self, df: pl.DataFrame, model: str = "deepseek/deepseek-v3.1-terminus"):
+    def __init__(self, df: pl.DataFrame, model: str = "deepseek/deepseek-v3.2"):
         self.df = df
         self.model = model
         self.api_key = os.getenv("OPENROUTER_API_KEY")
@@ -25,13 +28,24 @@ class NLService:
     def _build_system_prompt(self) -> str:
         # Schema generation logic similar to sidebot/query.py but for Polars
         schema = self._pl_to_schema(self.df, "orders")
+        logger.info(f"NLService schema:\n{schema}")
         prompt_path = Path(__file__).parent / "nl_prompt.md"
         if not prompt_path.exists():
             # Fallback or initialization logic
             return f"You are a SQL assistant. Schema:\n{schema}"
             
         with open(prompt_path, "r") as f:
-            return f.read().replace("${SCHEMA}", schema)
+            template = f.read()
+
+        variables = {
+            "SCHEMA": schema,
+        }
+
+        def _replace(match: re.Match[str]) -> str:
+            key = match.group(1).strip()
+            return variables.get(key, match.group(0))
+
+        return re.sub(r"{{\s*([A-Z0-9_]+)\s*}}", _replace, template)
 
     def _pl_to_schema(self, df: pl.DataFrame, name: str) -> str:
         schema = [f"Table: {name}", "Columns:"]

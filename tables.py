@@ -102,11 +102,16 @@ def get_orders_table(df: pd.DataFrame) -> Tabulator:
     # We only show ExecQty (no OrderQty distinct logic needed if they are same)
     if "ExecQty" in df.columns:
         df["OrderQty"] = df["ExecQty"]
+    
+    # Format Notional for display if present
+    if "Notional" in df.columns:
+        # Keep as integer for formatter to work properly
+        df["Notional"] = df["Notional"].fillna(0).astype(int)
 
     table_options = TableOptions(
         index="id",
-        height=420,
-        layout="fitColumns",
+        height="calc(100vh - 320px)",  # Dynamic height: fill available space minus header/controls
+        layout="fitDataStretch",  # Changed from fitColumns to enable horizontal scroll
         selectable_rows=1,
         columns=[
             {"field": "orderid", "title": "OrderID", "width": 90, "hozAlign": "center"},
@@ -116,8 +121,9 @@ def get_orders_table(df: pd.DataFrame) -> Tabulator:
             {"field": "Broker", "title": "Broker", "width": 80, "hozAlign": "center"},
             {"field": "Side", "title": "Side", "width": 70, "hozAlign": "center"},
             {"field": "Ticker", "title": "Ticker", "width": 80, "hozAlign": "center"},
-            {"field": "ExecQty", "title": "ExecQty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right"},
-            {"field": "PctADV", "title": "PctADV", "hozAlign": "right"},
+            {"field": "ExecQty", "title": "ExecQty", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right", "width": 100},
+            {"field": "Notional", "title": "Notional", "formatter": "money", "formatterParams": {"thousand": ",", "precision": 0}, "hozAlign": "right", "width": 120},
+            {"field": "PctADV", "title": "PctADV", "hozAlign": "right", "width": 90},
             {"field": "Strategy", "title": "Strategy", "width": 90, "hozAlign": "center"},
             {"field": "StartTime", "title": "Start", "width": 70, "hozAlign": "center"},
             {"field": "EndTime", "title": "End", "width": 70, "hozAlign": "center"},
